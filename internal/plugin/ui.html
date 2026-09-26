@@ -2667,7 +2667,7 @@
     <footer class="page-footer">
       <span>© 2026 <a href="https://github.com/haowang02/cpa-plugin-key-billing" target="_blank" rel="noopener noreferrer">CPA Key Billing</a></span>
       <span>&thinsp;·&thinsp;<a href="https://github.com/haowang02/cpa-plugin-key-billing/blob/main/LICENSE" target="_blank" rel="noopener noreferrer" data-i18n="ui.license">License</a></span>
-      <span>&thinsp;·&thinsp;<span data-i18n="ui.version">Version</span>: v1.3.20</span>
+      <span>&thinsp;·&thinsp;<span data-i18n="ui.version">Version</span>: v1.3.21</span>
     </footer>
 
     <div id="notice" class="notice" popover="manual"></div>
@@ -8140,6 +8140,9 @@
           const mismatchedModel = entry.response_model && entry.response_model !== entry.upstream_model ? entry.response_model : "";
           const mismatchLabel = m("ui.upstream_served_a_model_other_than_the_one_requested");
           const serviceTiers = [entry.service_tier, entry.response_service_tier].filter(Boolean).join("\u2009/\u2009") || "—";
+          const eventSourceType = entry.provider || entry.executor_type || m("ui.unknown_source");
+          const sourceAccount = entry.account || splitCredentialLabel(entry.source)[1] || entry.source;
+          const sourceIdentity = [sourceAccount, entry.workspace_name].filter(Boolean).join(" · ");
           const modelNote = mismatchedModel
             ? el(
                 "div",
@@ -8168,11 +8171,11 @@
             el(
               "td",
               { class: "small" },
-              el("div", { class: "request-event-cell-line mono" }, entry.executor_type || m("ui.unknown_executor")),
+              el("div", { class: "request-event-cell-line mono" }, eventSourceType),
               el(
                 "div",
-                { class: "request-event-source muted", title: displayLabel(entry.source) || null },
-                entry.source ? maskedLabelText(entry.source) : m("ui.unknown_source")
+                { class: "request-event-source muted", title: displayLabel(sourceIdentity) || null },
+                sourceIdentity ? maskedText(sourceIdentity) : m("ui.unknown_source")
               )
             ),
             el(

@@ -236,6 +236,12 @@ func TestAccountRequestEventsUseTheAdministratorSource(t *testing.T) {
 		Source: "private@example.com", Generate: true, RequestedAt: app.store.Now(),
 		Detail: UsageDetail{OutputTokens: 20, TotalTokens: 20},
 	})
+	app.SetHostCaller(func(method string, _ any) (json.RawMessage, error) {
+		if method != hostAuthGet {
+			t.Fatalf("host method = %q, want %q", method, hostAuthGet)
+		}
+		return json.RawMessage(`{"json":{"workspace_name":"Team Workspace"}}`), nil
+	})
 
 	response := callAccount(t, app, routeEvents, accountTestKeyA, nil)
 	var view billing.RequestEventView
@@ -243,7 +249,7 @@ func TestAccountRequestEventsUseTheAdministratorSource(t *testing.T) {
 		t.Fatal(errDecode)
 	}
 	if len(view.Entries) != 1 || view.Entries[0].ExecutorType != "CodexExecutor" ||
-		view.Entries[0].Source != "codex · private@example.com" {
+		view.Entries[0].Source != "codex · private@example.com" || view.Entries[0].WorkspaceName != "Team Workspace" {
 		t.Fatalf("account request event = %+v", view)
 	}
 	if view.Filters == nil || len(view.Filters.SourceOptions) != 1 || view.Filters.SourceOptions[0].Label != "codex · private@example.com" {

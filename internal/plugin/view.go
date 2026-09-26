@@ -139,6 +139,7 @@ func (a *App) listRequestEvents(req ManagementRequest, access viewAccess) Manage
 	if err != nil {
 		return viewErrorResponse(access, err)
 	}
+	a.enrichRequestEventWorkspaces(&view)
 	if access.APIKey {
 		for i := range view.Entries {
 			view.Entries[i].Scope = ""
@@ -151,6 +152,29 @@ func (a *App) listRequestEvents(req ManagementRequest, access viewAccess) Manage
 		view.Filters.SourceOptions = sourceFilterOptions(access.Scope, view.Filters.Sources)
 	}
 	return viewJSON(access, http.StatusOK, view)
+}
+
+// enrichRequestEventWorkspaces adds the non-secret workspace label from the
+// exact auth index recorded with each event. It never correlates by timing,
+// model, or account text, and a missing host field simply leaves it blank.
+func (a *App) enrichRequestEventWorkspaces(view *billing.RequestEventView) {
+	if a == nil || a.hostCaller == nil || view == nil {
+		return
+	}
+	names := make(map[string]string)
+	loaded := make(map[string]struct{})
+	for index := range view.Entries {
+		entry := &view.Entries[index]
+		if !strings.EqualFold(strings.TrimSpace(entry.Provider), "codex") || strings.TrimSpace(entry.AuthIndex) == "" {
+			continue
+		}
+		authIndex := strings.TrimSpace(entry.AuthIndex)
+		if _, seen := loaded[authIndex]; !seen {
+			names[authIndex] = a.authWorkspaceName(hostAuthFile{AuthIndex: authIndex})
+			loaded[authIndex] = struct{}{}
+		}
+		entry.WorkspaceName = names[authIndex]
+	}
 }
 
 func (a *App) listRequestErrors(req ManagementRequest, access viewAccess) ManagementResponse {

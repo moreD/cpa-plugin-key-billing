@@ -39,11 +39,12 @@ const RequestEventRetention = 365 * 24 * time.Hour
 type RequestEventRow struct {
 	RequestEvent
 	// Encode the database identity as a string to preserve all 64 bits in browsers.
-	ID        int64  `json:"id,string"`
-	Preview   string `json:"preview,omitempty"`
-	Label     string `json:"label,omitempty"`
-	Source    string `json:"source,omitempty"`
-	ErrorBody string `json:"error_body,omitempty"`
+	ID            int64  `json:"id,string"`
+	Preview       string `json:"preview,omitempty"`
+	Label         string `json:"label,omitempty"`
+	Source        string `json:"source,omitempty"`
+	WorkspaceName string `json:"workspace_name,omitempty"`
+	ErrorBody     string `json:"error_body,omitempty"`
 }
 
 // RequestEventQuery selects one filtered page of request events.
