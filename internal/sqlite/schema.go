@@ -153,6 +153,7 @@ CREATE TABLE auth_quota_snapshots (
 	next_fetch_at       INTEGER NOT NULL DEFAULT 0,
 	available_count     INTEGER NOT NULL DEFAULT -1,
 	credits_json        TEXT    NOT NULL DEFAULT '[]',
+	quota_json          TEXT    NOT NULL DEFAULT '[]',
 	PRIMARY KEY (auth_index, provider)
 );
 

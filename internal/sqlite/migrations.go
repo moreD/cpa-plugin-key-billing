@@ -60,6 +60,18 @@ func migrateToV18(tx *sql.Tx, version int) error {
 	return nil
 }
 
+func migrateToV19(tx *sql.Tx, version int) error {
+	if version <= 17 {
+		if err := migrateToV18(tx, version); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`ALTER TABLE auth_quota_snapshots ADD COLUMN quota_json TEXT NOT NULL DEFAULT '[]'`); err != nil {
+		return fmt.Errorf("Add auth quota rows: %w", err)
+	}
+	return nil
+}
+
 // Rows recorded before schema 17 carry no upstream response report.
 func migrateUpstreamResponseReports(tx *sql.Tx) error {
 	if _, err := tx.Exec(`

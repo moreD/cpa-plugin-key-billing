@@ -81,6 +81,12 @@ func TestAuthFilesExposePersistedUsageByAuthIndex(t *testing.T) {
 		AuthIndex: "codex-usage", AuthType: "oauth", Source: "user@example.com", RequestedAt: app.store.Now(),
 		Detail: UsageDetail{InputTokens: 100, CacheReadTokens: 20, OutputTokens: 30, TotalTokens: 130},
 	})
+	if err := app.store.SaveAuthQuota(billing.AuthQuotaSnapshot{
+		AuthIndex: "codex-usage", Provider: "codex", FetchedAt: app.store.Now(), NextFetchAt: app.store.Now().Add(time.Hour),
+		Quota: []billing.AuthQuotaRow{{Label: "5-hour limit", RemainingPercent: floatPointer(72)}},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	app.SetHostCaller(func(method string, _ any) (json.RawMessage, error) {
 		switch method {
 		case hostAuthList:
@@ -103,6 +109,10 @@ func TestAuthFilesExposePersistedUsageByAuthIndex(t *testing.T) {
 	if len(payload.Files) != 1 || payload.Files[0].Usage.Requests != 1 || payload.Files[0].Usage.TotalTokens != 130 ||
 		payload.Files[0].Usage.InputTokens != 80 || payload.Files[0].Usage.CacheReadTokens != 20 || payload.Files[0].Usage.OutputTokens != 30 {
 		t.Fatalf("auth usage = %+v", payload.Files)
+	}
+	if len(payload.Files[0].Quota) != 1 || payload.Files[0].Quota[0].Label != "5-hour limit" ||
+		payload.Files[0].Quota[0].RemainingPercent == nil || *payload.Files[0].Quota[0].RemainingPercent != 72 {
+		t.Fatalf("cached auth quota = %+v", payload.Files[0].Quota)
 	}
 }
 
@@ -411,7 +421,8 @@ func TestCodexQuotaPreservesAdditionalDynamicWindows(t *testing.T) {
 	}
 	snapshot, found, errSnapshot := app.store.AuthQuota("codex-1", "codex")
 	if errSnapshot != nil || !found || !snapshot.AvailableCountKnown || snapshot.AvailableCount != 1 ||
-		len(snapshot.CreditExpirations) != 1 || snapshot.CreditExpirations[0] != "2026-10-04T02:27:00Z" || snapshot.NextFetchAt.IsZero() {
+		len(snapshot.CreditExpirations) != 1 || snapshot.CreditExpirations[0] != "2026-10-04T02:27:00Z" ||
+		len(snapshot.Quota) != 3 || snapshot.Quota[0].Label != "Weekly limit" || snapshot.NextFetchAt.IsZero() {
 		t.Fatalf("persisted reset credits = %+v, found=%t, err=%v", snapshot, found, errSnapshot)
 	}
 	if result.Quota[0].RemainingPercent == nil || *result.Quota[0].RemainingPercent != 62 {

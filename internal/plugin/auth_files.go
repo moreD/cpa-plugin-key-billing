@@ -64,6 +64,7 @@ type authFileView struct {
 	RateLimitResetCredits               []resetCreditExpiry   `json:"rate_limit_reset_credits,omitempty"`
 	QuotaFetchedAt                      time.Time             `json:"quota_fetched_at,omitzero"`
 	QuotaNextFetchAt                    time.Time             `json:"quota_next_fetch_at,omitzero"`
+	Quota                               []quotaRow            `json:"quota,omitempty"`
 }
 
 type authFileListResponse struct {
@@ -177,7 +178,7 @@ func (a *App) persistAuthQuotaResult(authIndex, provider string, result *authQuo
 	}
 	snapshot := billing.AuthQuotaSnapshot{
 		AuthIndex: authIndex, Provider: provider, FetchedAt: fetchedAt, NextFetchAt: nextAuthQuotaRefresh(now),
-		CreditExpirations: expirations,
+		CreditExpirations: expirations, Quota: quotaRowsForStorage(result.Quota),
 	}
 	if result.RateLimitResetCreditsAvailableCount != nil {
 		snapshot.AvailableCount = *result.RateLimitResetCreditsAvailableCount
@@ -355,6 +356,7 @@ func (a *App) listAuthFiles(access viewAccess) ([]authFileView, error) {
 		var resetCount *int
 		var resetCredits []resetCreditExpiry
 		var quotaFetchedAt, quotaNextFetchAt time.Time
+		var cachedQuota []quotaRow
 		if snapshot, found, errSnapshot := a.store.AuthQuota(file.AuthIndex, category); errSnapshot == nil && found {
 			quotaFetchedAt, quotaNextFetchAt = snapshot.FetchedAt, snapshot.NextFetchAt
 			if snapshot.AvailableCountKnown {
@@ -364,6 +366,7 @@ func (a *App) listAuthFiles(access viewAccess) ([]authFileView, error) {
 			for _, expiresAt := range snapshot.CreditExpirations {
 				resetCredits = append(resetCredits, resetCreditExpiry{ExpiresAt: expiresAt})
 			}
+			cachedQuota = quotaRowsFromStorage(snapshot.Quota)
 		}
 		views = append(views, authFileView{
 			AuthIndex: file.AuthIndex, Name: file.Name, Category: category, Email: cleanText(file.Email),
@@ -373,6 +376,7 @@ func (a *App) listAuthFiles(access viewAccess) ([]authFileView, error) {
 			QuotaReasonMessage: messages.Literal(quotaReason), Usage: usage,
 			RateLimitResetCreditsAvailableCount: resetCount, RateLimitResetCredits: resetCredits,
 			QuotaFetchedAt: quotaFetchedAt, QuotaNextFetchAt: quotaNextFetchAt,
+			Quota: cachedQuota,
 		})
 	}
 	sort.SliceStable(views, func(i, j int) bool {
@@ -390,6 +394,30 @@ func (a *App) listAuthFiles(access viewAccess) ([]authFileView, error) {
 		return views[i].AuthIndex < views[j].AuthIndex
 	})
 	return views, nil
+}
+
+func quotaRowsForStorage(rows []quotaRow) []billing.AuthQuotaRow {
+	result := make([]billing.AuthQuotaRow, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, billing.AuthQuotaRow{
+			Label: row.Label, GroupLabel: row.GroupLabel, LabelPrefix: row.LabelPrefix,
+			RemainingPercent: row.RemainingPercent, Used: row.Used, Limit: row.Limit,
+			Currency: row.Currency, ResetAt: row.ResetAt,
+		})
+	}
+	return result
+}
+
+func quotaRowsFromStorage(rows []billing.AuthQuotaRow) []quotaRow {
+	result := make([]quotaRow, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, quotaRow{
+			Label: row.Label, GroupLabel: row.GroupLabel, LabelPrefix: row.LabelPrefix,
+			RemainingPercent: row.RemainingPercent, Used: row.Used, Limit: row.Limit,
+			Currency: row.Currency, ResetAt: row.ResetAt,
+		})
+	}
+	return result
 }
 
 // authWorkspaceName reads only the non-secret workspace_name field from the

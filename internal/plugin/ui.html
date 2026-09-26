@@ -2667,7 +2667,7 @@
     <footer class="page-footer">
       <span>© 2026 <a href="https://github.com/haowang02/cpa-plugin-key-billing" target="_blank" rel="noopener noreferrer">CPA Key Billing</a></span>
       <span>&thinsp;·&thinsp;<a href="https://github.com/haowang02/cpa-plugin-key-billing/blob/main/LICENSE" target="_blank" rel="noopener noreferrer" data-i18n="ui.license">License</a></span>
-      <span>&thinsp;·&thinsp;<span data-i18n="ui.version">Version</span>: v1.3.19</span>
+      <span>&thinsp;·&thinsp;<span data-i18n="ui.version">Version</span>: v1.3.20</span>
     </footer>
 
     <div id="notice" class="notice" popover="manual"></div>
@@ -5858,7 +5858,7 @@
         const usage = result?.usage || file.usage;
         const source = result || file;
         const hasCachedResetCredits = file.rate_limit_reset_credits_available_count != null || (file.rate_limit_reset_credits || []).length;
-        if (!result && !Number(usage?.requests) && !hasCachedResetCredits) return null;
+        if (!result && !Number(usage?.requests) && !hasCachedResetCredits && !(file.quota || []).length) return null;
         const summary = [];
         if (
           source.rate_limit_reset_credits_available_count != null &&
@@ -5877,14 +5877,14 @@
             );
           }
         }
-        const rows = result?.quota || [];
+        const rows = result ? result.quota || [] : file.quota || [];
         return el(
           "div",
           { class: "auth-file-quota" },
           renderAuthUsage(usage),
           summary.length ? el("div", { class: "auth-quota-summary" }, summary) : null,
           renderAuthResetCredits(file, result || file),
-          result && rows.length
+          rows.length
             ? el("div", { class: "auth-quota-list" }, rows.map(renderQuotaRow))
             : result ? el("div", { class: "muted small", text: m("ui.the_upstream_returned_no_displayable_quota") }) : null
         );

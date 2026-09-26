@@ -97,6 +97,22 @@ type AuthQuotaSnapshot struct {
 	AvailableCount      int
 	AvailableCountKnown bool
 	CreditExpirations   []string
+	Quota               []AuthQuotaRow
+}
+
+// AuthQuotaRow is a provider quota window retained with an auth snapshot.
+// The labels are display data from the plugin's provider parser; percentages,
+// amounts, and reset times remain optional because providers expose different
+// shapes.
+type AuthQuotaRow struct {
+	Label            string   `json:"label,omitempty"`
+	GroupLabel       string   `json:"group_label,omitempty"`
+	LabelPrefix      string   `json:"label_prefix,omitempty"`
+	RemainingPercent *float64 `json:"remaining_percent,omitempty"`
+	Used             *float64 `json:"used,omitempty"`
+	Limit            *float64 `json:"limit,omitempty"`
+	Currency         string   `json:"currency,omitempty"`
+	ResetAt          string   `json:"reset_at,omitempty"`
 }
 
 // RequestEventView is one page plus totals that cannot be inferred from it.
