@@ -108,6 +108,40 @@ func TestDeletedKeyRetainsUsageAndIdentity(t *testing.T) {
 	}
 }
 
+func TestResetQuotaSevenDayOnlyResetsWeeklyWindows(t *testing.T) {
+	now := time.Date(2026, 8, 12, 15, 57, 0, 0, time.UTC)
+	clock := now
+	store := newAccountStore(t, now)
+	store.now = func() time.Time { return clock }
+	store.ReplaceAll(func(state *State) {
+		state.Plans = []Plan{{ID: "p", Name: "Mixed", Windows: []QuotaWindow{
+			{ID: "hour", Name: "Hourly", AmountUSD: 1, PeriodSeconds: 3600},
+			{ID: "week", Name: "Weekly", AmountUSD: 10, PeriodSeconds: 604800},
+		}}}
+		state.Keys[CallerScope(keptKeyPlaintext)] = &KeyState{PlanID: "p"}
+	})
+	scope := CallerScope(keptKeyPlaintext)
+	store.RecordUsage(admittedEvent(store, scope, now))
+	store.Read(func(state *State) {
+		if len(state.Keys[scope].Cycles) != 2 {
+			t.Fatalf("cycles before reset = %+v, want both windows", state.Keys[scope].Cycles)
+		}
+	})
+	result, err := store.ResetQuota(ResetRequest{Mode: "seven_day", Scopes: []string{scope}})
+	if err != nil || result.Keys != 1 || result.Windows != 1 {
+		t.Fatalf("ResetQuota = %+v, %v", result, err)
+	}
+	store.Read(func(state *State) {
+		cycles := state.Keys[scope].Cycles
+		if _, ok := cycles["week"]; ok {
+			t.Fatalf("weekly cycle was not reset: %+v", cycles)
+		}
+		if _, ok := cycles["hour"]; !ok {
+			t.Fatalf("hourly cycle was reset unexpectedly: %+v", cycles)
+		}
+	})
+}
+
 func TestSyncKeysRestoresQuotaAndBindings(t *testing.T) {
 	for _, unified := range []bool{false, true} {
 		for _, period := range []int64{3600, 7200} {

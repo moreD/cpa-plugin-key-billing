@@ -173,6 +173,10 @@ func (s *Store) ResetQuota(req ResetRequest) (ResetResult, error) {
 		if len(req.Scopes) == 0 {
 			return ResetResult{}, invalidf("Select the API keys to reset")
 		}
+	} else if req.Mode == "seven_day" {
+		if len(req.Scopes) == 0 {
+			return ResetResult{}, invalidf("Select the API keys to reset")
+		}
 	} else {
 		return ResetResult{}, invalidf("Invalid quota reset mode")
 	}
@@ -196,7 +200,31 @@ func (s *Store) ResetQuota(req ResetRequest) (ResetResult, error) {
 		for _, scope := range scopes {
 			key := state.Keys[scope]
 			count := len(key.Cycles)
-			key.Cycles = nil
+			if req.Mode == "seven_day" {
+				plan, ok := state.FindPlan(key.PlanID)
+				if !ok {
+					return ResetResult{}, Changes{}, notFoundf("Subscription plan %q does not exist", key.PlanID)
+				}
+				sevenDayIDs := make(map[string]struct{})
+				for _, window := range plan.Windows {
+					if window.PeriodSeconds == 7*24*60*60 {
+						sevenDayIDs[window.ID] = struct{}{}
+					}
+				}
+				if len(sevenDayIDs) == 0 {
+					return ResetResult{}, Changes{}, invalidf("The subscription plan has no 7-day quota window")
+				}
+				count = 0
+				for id := range key.Cycles {
+					if _, ok := sevenDayIDs[id]; ok {
+						delete(key.Cycles, id)
+						count++
+					}
+				}
+			}
+			if req.Mode != "seven_day" {
+				key.Cycles = nil
+			}
 			if count > 0 {
 				changed = append(changed, scope)
 				result.Keys++

@@ -290,6 +290,45 @@ func TestSchedulerSeparatesSameProviderBySource(t *testing.T) {
 	}
 }
 
+func TestSchedulerDisabledDelegatesToHost(t *testing.T) {
+	app := newTestApp(t)
+	t.Cleanup(app.Shutdown)
+	config := []byte("enabled: true\nscheduler_mode: disabled\nstate_file: \"" + t.TempDir() + "/state.db\"\n")
+	if _, err := app.HandleMethod(MethodPluginRegister, mustMarshal(t, LifecycleRequest{ConfigYAML: config})); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := app.HandleMethod(MethodSchedulerPick, mustMarshal(t, schedulerRequest("", SchedulerAuthCandidate{ID: "auth-a", Provider: "codex"})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response SchedulerPickResponse
+	decodeResult(t, raw, &response)
+	if response.Handled {
+		t.Fatalf("response = %+v, disabled scheduler should delegate", response)
+	}
+}
+
+func TestSmartSchedulerPicksCandidateAcrossPriorityTiers(t *testing.T) {
+	app := newTestApp(t)
+	t.Cleanup(app.Shutdown)
+	config := []byte("enabled: true\nscheduler_mode: smart\nstate_file: \"" + t.TempDir() + "/state.db\"\n")
+	if _, err := app.HandleMethod(MethodPluginRegister, mustMarshal(t, LifecycleRequest{ConfigYAML: config})); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := app.HandleMethod(MethodSchedulerPick, mustMarshal(t, schedulerRequest(billing.CallerScope("sk-smart-test"),
+		SchedulerAuthCandidate{ID: "auth-low", Provider: "codex", Priority: 0},
+		SchedulerAuthCandidate{ID: "auth-high", Provider: "codex", Priority: 5},
+	)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response SchedulerPickResponse
+	decodeResult(t, raw, &response)
+	if !response.Handled || response.AuthID == "" {
+		t.Fatalf("response = %+v, smart scheduler should select a candidate", response)
+	}
+}
+
 func TestUnclassifiedCandidateRequiresExactAllowlistReference(t *testing.T) {
 	candidate := SchedulerAuthCandidate{ID: "opaque-auth", Provider: "codex", Attributes: map[string]string{"auth_kind": "apikey"}}
 	providerOnly := billing.RoutingDecision{RouteRule: billing.RouteRule{CredentialProviders: []billing.CredentialProviderSelector{{Source: billing.CredentialSourceAIProviders, Provider: "codex"}}}}

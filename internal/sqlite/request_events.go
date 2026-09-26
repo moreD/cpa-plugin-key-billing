@@ -59,6 +59,37 @@ func (d *DB) requestEventCount() (int, error) {
 	return count, nil
 }
 
+func (d *DB) AuthUsage(authIndex, provider string, since time.Time) (billing.AuthUsageView, error) {
+	var usage billing.AuthUsageView
+	var lastAt int64
+	err := d.db.QueryRow(`
+		SELECT count(*),
+			coalesce(sum(failed = 0), 0),
+			coalesce(sum(failed != 0), 0),
+			coalesce(sum(uncached_input_tokens), 0),
+			coalesce(sum(cache_read_tokens), 0),
+			coalesce(sum(cache_write_tokens), 0),
+			coalesce(sum(billed_output_tokens), 0),
+			coalesce(sum(uncached_input_tokens + cache_read_tokens + cache_write_tokens + billed_output_tokens), 0),
+			coalesce(sum(total_usd), 0),
+			coalesce(max(at), 0)
+		FROM request_events
+		WHERE at >= ? AND auth_index = ? AND (? = '' OR provider = ?)`,
+		nanos(since), authIndex, provider, provider,
+	).Scan(
+		&usage.Requests, &usage.Successful, &usage.Failed,
+		&usage.InputTokens, &usage.CacheReadTokens, &usage.CacheWriteTokens,
+		&usage.OutputTokens, &usage.TotalTokens, &usage.CostUSD, &lastAt,
+	)
+	if err != nil {
+		return billing.AuthUsageView{}, fmt.Errorf("Read auth usage: %w", err)
+	}
+	if lastAt != 0 {
+		usage.LastRequestAt = timeAt(lastAt)
+	}
+	return usage, nil
+}
+
 func pruneRequestEvents(exec execer, cutoff time.Time) error {
 	if cutoff.IsZero() {
 		return nil
@@ -175,6 +206,7 @@ func eventFilter(source string, query billing.RequestEventQuery, since time.Time
 		{"(" + requestEventSourceName + ")", query.Source},
 		{"r.executor_type", query.Executor},
 		{"r.provider", query.Provider},
+		{"r.auth_index", query.AuthIndex},
 	} {
 		if value := strings.TrimSpace(filter.value); value != "" {
 			where += " AND " + filter.expression + " = ?"

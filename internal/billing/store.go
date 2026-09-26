@@ -159,6 +159,21 @@ func (s *Store) Enabled() bool {
 	return s.cfg.Enabled
 }
 
+// SchedulerMode selects which credential scheduler, if any, the plugin owns.
+// "disabled" leaves scheduling to CPA or another scheduler plugin.
+func (s *Store) SchedulerMode() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cfg.SchedulerMode
+}
+
+// Config returns the normalized plugin configuration used by runtime hooks.
+func (s *Store) Config() Config {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cfg
+}
+
 func (s *Store) MaskAPIKeyViewEmails() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

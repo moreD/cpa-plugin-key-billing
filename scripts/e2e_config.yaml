@@ -20,6 +20,7 @@ plugins:
     cpa-key-billing:
       enabled: true
       debug: true
+      scheduler_mode: regular
       state_file: "__RUNTIME_DIR__/state.db"
 
 # Keep the prefixed and bare model routes on distinct upstreams.

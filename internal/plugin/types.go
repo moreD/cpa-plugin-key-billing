@@ -18,7 +18,7 @@ const (
 const (
 	PluginID   = "cpa-key-billing"
 	PluginName = "cpa-key-billing"
-	Version    = "1.3.18"
+	Version    = "1.3.19"
 
 	MenuLabel       = "API Key Billing"
 	MenuDescription = "Manage downstream API key routing, billing, concurrency limits, subscription quotas, and usage"
@@ -89,17 +89,19 @@ type Metadata struct {
 }
 
 type ConfigField struct {
-	Name        string `json:"Name"`
-	Type        string `json:"Type"`
-	Description string `json:"Description"`
+	Name        string   `json:"Name"`
+	Type        string   `json:"Type"`
+	EnumValues  []string `json:"EnumValues,omitempty"`
+	Description string   `json:"Description"`
 }
 
 type Capabilities struct {
-	RequestInterceptor     bool `json:"request_interceptor"`
-	RequestLifecyclePlugin bool `json:"request_lifecycle_plugin"`
-	UsagePlugin            bool `json:"usage_plugin"`
-	ManagementAPI          bool `json:"management_api"`
-	Scheduler              bool `json:"scheduler"`
+	RequestInterceptor        bool `json:"request_interceptor"`
+	RequestLifecyclePlugin    bool `json:"request_lifecycle_plugin"`
+	UsagePlugin               bool `json:"usage_plugin"`
+	ManagementAPI             bool `json:"management_api"`
+	Scheduler                 bool `json:"scheduler"`
+	SchedulerAcrossPriorities bool `json:"scheduler_across_priorities,omitempty"`
 }
 
 type SchedulerPickRequest struct {
@@ -113,6 +115,7 @@ type SchedulerPickRequest struct {
 type SchedulerAuthCandidate struct {
 	ID         string            `json:"ID"`
 	Provider   string            `json:"Provider"`
+	Priority   int               `json:"Priority"`
 	Status     string            `json:"Status"`
 	Attributes map[string]string `json:"Attributes"`
 }

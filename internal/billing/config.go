@@ -15,6 +15,11 @@ type Config struct {
 	Enabled               bool   `yaml:"enabled"`
 	Debug                 bool   `yaml:"debug"`
 	StateFile             string `yaml:"state_file"`
+	SchedulerMode         string `yaml:"scheduler_mode"`
+	SmartSticky           bool   `yaml:"smart_sticky"`
+	SmartStickyTTLSeconds int    `yaml:"smart_sticky_ttl_seconds"`
+	SmartWindowSeconds    int    `yaml:"smart_window_seconds"`
+	SmartMaxInflight      int    `yaml:"smart_max_inflight_per_profile"`
 	CodexFastModeBilling  bool   `yaml:"codex_fast_mode_billing"`
 	MaskAPIKeyViewEmails  bool   `yaml:"mask_api_key_view_emails"`
 	AllowAPIKeyQuotaReset bool   `yaml:"allow_api_key_quota_reset"`
@@ -22,8 +27,13 @@ type Config struct {
 
 func DefaultConfig() Config {
 	return Config{
-		Enabled:   false,
-		StateFile: DefaultStateFile,
+		Enabled:               false,
+		StateFile:             DefaultStateFile,
+		SchedulerMode:         "disabled",
+		SmartSticky:           true,
+		SmartStickyTTLSeconds: 24 * 60 * 60,
+		SmartWindowSeconds:    120,
+		SmartMaxInflight:      8,
 	}
 }
 
@@ -60,6 +70,30 @@ func (c Config) normalized() Config {
 	c.StateFile = strings.TrimSpace(c.StateFile)
 	if c.StateFile == "" {
 		c.StateFile = DefaultStateFile
+	}
+	c.SchedulerMode = strings.ToLower(strings.TrimSpace(c.SchedulerMode))
+	if c.SchedulerMode == "" {
+		c.SchedulerMode = "disabled"
+	}
+	switch c.SchedulerMode {
+	case "disabled", "regular", "smart":
+	default:
+		c.SchedulerMode = "disabled"
+	}
+	if c.SmartStickyTTLSeconds <= 0 {
+		c.SmartStickyTTLSeconds = 24 * 60 * 60
+	}
+	if c.SmartWindowSeconds <= 0 {
+		c.SmartWindowSeconds = 120
+	}
+	if c.SmartWindowSeconds > 3600 {
+		c.SmartWindowSeconds = 3600
+	}
+	if c.SmartMaxInflight <= 0 {
+		c.SmartMaxInflight = 8
+	}
+	if c.SmartMaxInflight > 10000 {
+		c.SmartMaxInflight = 10000
 	}
 	return c
 }

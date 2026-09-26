@@ -10,6 +10,9 @@ type Repository interface {
 	DeletePrice(modelID string) error
 
 	EventKeys(from, to, since time.Time) ([]EventKey, error)
+	AuthUsage(authIndex, provider string, since time.Time) (AuthUsageView, error)
+	AuthQuota(authIndex, provider string) (AuthQuotaSnapshot, bool, error)
+	SaveAuthQuota(snapshot AuthQuotaSnapshot) error
 	RequestEvents(query RequestEventQuery, since time.Time) (RequestEventView, error)
 	RequestErrors(query RequestErrorQuery, since time.Time) (RequestErrorView, error)
 	Analysis(query RequestEventQuery, since time.Time) (AnalysisView, error)

@@ -1,6 +1,9 @@
 package billing
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // RequestEvent is one persisted request record and never stores a plaintext API key.
 // Account contains only an OAuth identity or masked API key.
@@ -47,12 +50,15 @@ type RequestEventRow struct {
 type RequestEventQuery struct {
 	// Scope is an internal authorization boundary. Callers never select it from
 	// a query parameter: account endpoints derive it from the presented API key.
-	Scope          string
-	KeyScope       string
-	Model          string
-	Source         string
-	Executor       string
-	Provider       string
+	Scope    string
+	KeyScope string
+	Model    string
+	Source   string
+	Executor string
+	Provider string
+	// AuthIndex scopes the query to one host-owned upstream credential. It is
+	// used internally when enriching auth-file quota views.
+	AuthIndex      string
 	Failed         *bool
 	From           time.Time
 	To             time.Time
@@ -62,6 +68,35 @@ type RequestEventQuery struct {
 	Offset         int
 	// Limit is the page size; a non-positive limit returns every match.
 	Limit int
+}
+
+// AuthUsageView is the retained usage summary for one upstream credential.
+// It is derived from persisted request events, so it survives plugin restarts
+// without duplicating the event data in another cache table.
+type AuthUsageView struct {
+	Requests         int64     `json:"requests"`
+	Successful       int64     `json:"successful"`
+	Failed           int64     `json:"failed"`
+	InputTokens      int64     `json:"input_tokens"`
+	CacheReadTokens  int64     `json:"cache_read_tokens"`
+	CacheWriteTokens int64     `json:"cache_write_tokens"`
+	OutputTokens     int64     `json:"output_tokens"`
+	TotalTokens      int64     `json:"total_tokens"`
+	CostUSD          float64   `json:"cost_usd"`
+	LastRequestAt    time.Time `json:"last_request_at,omitzero"`
+}
+
+// AuthQuotaSnapshot is the last provider quota response retained for one
+// upstream credential. AvailableCountKnown distinguishes a reported zero
+// from a provider response that did not include a count.
+type AuthQuotaSnapshot struct {
+	AuthIndex           string
+	Provider            string
+	FetchedAt           time.Time
+	NextFetchAt         time.Time
+	AvailableCount      int
+	AvailableCountKnown bool
+	CreditExpirations   []string
 }
 
 // RequestEventView is one page plus totals that cannot be inferred from it.
@@ -100,6 +135,39 @@ func (s *Store) RequestEvents(query RequestEventQuery) (RequestEventView, error)
 		view.Entries = []RequestEventRow{}
 	}
 	return view, err
+}
+
+// AuthUsage returns the retained usage summary for one upstream credential.
+// Request events remain the source of truth; this avoids a second mutable
+// aggregate that could diverge from the request history.
+func (s *Store) AuthUsage(authIndex, provider string) (AuthUsageView, error) {
+	return withRepository(s, func(repo Repository) (AuthUsageView, error) {
+		return repo.AuthUsage(strings.TrimSpace(authIndex), strings.TrimSpace(provider), s.Now().Add(-RequestEventRetention))
+	})
+}
+
+func (s *Store) AuthQuota(authIndex, provider string) (AuthQuotaSnapshot, bool, error) {
+	type result struct {
+		snapshot AuthQuotaSnapshot
+		found    bool
+	}
+	value, err := withRepository(s, func(repo Repository) (result, error) {
+		snapshot, found, err := repo.AuthQuota(strings.TrimSpace(authIndex), strings.TrimSpace(provider))
+		return result{snapshot: snapshot, found: found}, err
+	})
+	return value.snapshot, value.found, err
+}
+
+func (s *Store) SaveAuthQuota(snapshot AuthQuotaSnapshot) error {
+	snapshot.AuthIndex = strings.TrimSpace(snapshot.AuthIndex)
+	snapshot.Provider = strings.TrimSpace(snapshot.Provider)
+	if snapshot.AuthIndex == "" || snapshot.Provider == "" {
+		return invalidf("Auth quota snapshot requires an auth index and provider")
+	}
+	_, err := withRepository(s, func(repo Repository) (struct{}, error) {
+		return struct{}{}, repo.SaveAuthQuota(snapshot)
+	})
+	return err
 }
 
 // EventKey identifies a key with at least one request or error in the time range.

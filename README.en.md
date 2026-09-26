@@ -102,6 +102,37 @@ plugins:
 
 Restart CLIProxyAPI and open **API Key Billing** in the management panel. Review model pricing, create subscription plans, and bind the API keys whose quotas you want to enforce.
 
+### Migrating the legacy scheduler and API-key limits
+
+If the CPA configuration still has the separate `smart-load-balancer` plugin and
+`api-keys[].cost-limits`, run the migration script before switching to this
+plugin:
+
+```sh
+python3 scripts/migrate_legacy_settings.py --config /path/to/config.yaml
+```
+
+It writes a reviewed `config.yaml.migrated.yaml` and a plan manifest. The
+manifest converts each legacy `7d` dollar limit into a 7-day subscription plan,
+binds keys by their non-reversible caller-scope hash, removes the legacy
+`cost-limits` fields, and replaces the legacy scheduler with the embedded smart scheduler. Legacy `12h`
+limits are intentionally ignored. The separate smart-load-balancer plugin and
+its registry source are removed from the migrated configuration; the embedded
+defaults retain its 24-hour sticky window and eight-request profile limit.
+
+After reviewing and activating the migrated configuration, sync the keys and
+plans through the running plugin:
+
+```sh
+CPA_MANAGEMENT_KEY='your-management-key' \
+  python3 scripts/migrate_legacy_settings.py \
+    --config /path/to/config.yaml.migrated.yaml \
+    --manifest /path/to/config.yaml.migration.json --apply
+```
+
+Use `--in-place` only when you want the script to create a timestamped backup
+and replace the original configuration automatically.
+
 ## Access
 
 Administrators can open the plugin from the management panel or visit it directly:

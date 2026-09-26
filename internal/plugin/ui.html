@@ -2457,6 +2457,43 @@
           </div>
         </section>
 
+        <section id="tab-scheduler-settings" class="hidden">
+          <div class="card">
+            <div class="row spread section-toolbar"> <h2 data-i18n="ui.scheduler_settings">Scheduler</h2> </div>
+            <div class="plan-details">
+              <label class="field">
+                <span data-i18n="ui.scheduler_mode">Scheduler mode</span>
+                <span class="native-select">
+                  <select id="scheduler-mode" aria-label="Scheduler mode" data-i18n-aria-label="ui.scheduler_mode">
+                    <option value="smart" data-i18n="ui.scheduler_mode_smart">Smart</option>
+                    <option value="regular" data-i18n="ui.scheduler_mode_regular">Regular</option>
+                    <option value="disabled" data-i18n="ui.scheduler_mode_disabled">Disabled</option>
+                  </select>
+                </span>
+              </label>
+              <label class="remember-row">
+                <input id="smart-sticky" type="checkbox" />
+                <span data-i18n="ui.smart_sticky">Keep client sticky routing</span>
+              </label>
+              <label class="field">
+                <span data-i18n="ui.smart_sticky_ttl">Sticky lifetime (seconds)</span>
+                <input id="smart-sticky-ttl" type="number" min="1" max="604800" inputmode="numeric" />
+              </label>
+              <label class="field">
+                <span data-i18n="ui.smart_window">Load window (seconds)</span>
+                <input id="smart-window" type="number" min="1" max="3600" inputmode="numeric" />
+              </label>
+              <label class="field">
+                <span data-i18n="ui.smart_max_inflight">Per-auth concurrency threshold</span>
+                <input id="smart-max-inflight" type="number" min="1" max="10000" inputmode="numeric" />
+              </label>
+            </div>
+            <p id="scheduler-mode-hint" class="muted small" data-i18n="ui.scheduler_mode_hint">Choose which component selects upstream credentials for requests.</p>
+            <p id="smart-settings-hint" class="muted small" data-i18n="ui.smart_settings_hint">These smart settings are active when Smart is selected.</p>
+            <div id="scheduler-mode-status" class="notice" role="status"></div>
+          </div>
+        </section>
+
         <section id="tab-plugin-logs" class="hidden">
           <div class="card event-list-card plugin-log-card">
             <div class="row spread section-toolbar">
@@ -2630,7 +2667,7 @@
     <footer class="page-footer">
       <span>© 2026 <a href="https://github.com/haowang02/cpa-plugin-key-billing" target="_blank" rel="noopener noreferrer">CPA Key Billing</a></span>
       <span>&thinsp;·&thinsp;<a href="https://github.com/haowang02/cpa-plugin-key-billing/blob/main/LICENSE" target="_blank" rel="noopener noreferrer" data-i18n="ui.license">License</a></span>
-      <span>&thinsp;·&thinsp;<span data-i18n="ui.version">Version</span>: v1.3.18</span>
+      <span>&thinsp;·&thinsp;<span data-i18n="ui.version">Version</span>: v1.3.19</span>
     </footer>
 
     <div id="notice" class="notice" popover="manual"></div>
@@ -3496,6 +3533,90 @@
 
       const plugin = (method, path, body, opts) => api(method, PLUGIN_BASE + path, body, opts);
       const accountAPI = (path, opts) => api("GET", ACCOUNT_BASE + path, null, { ...opts, raw: true });
+      const SCHEDULER_MODES = ["smart", "regular", "disabled"];
+      const SMART_DEFAULTS = {
+        smart_sticky: true,
+        smart_sticky_ttl_seconds: 86400,
+        smart_window_seconds: 120,
+        smart_max_inflight_per_profile: 8
+      };
+
+      function schedulerModeMessage(mode) {
+        if (mode === "regular") return m("ui.scheduler_mode_regular_hint");
+        if (mode === "disabled") return m("ui.scheduler_mode_disabled_hint");
+        return m("ui.scheduler_mode_smart_hint");
+      }
+
+      function renderSchedulerSettings(config) {
+        const select = $("scheduler-mode");
+        if (!select) return;
+        const normalizedMode = String(config.scheduler_mode || "disabled").toLowerCase();
+        const normalized = SCHEDULER_MODES.includes(normalizedMode) ? normalizedMode : "disabled";
+        if (select.value !== normalized) select.value = normalized;
+        setText($("scheduler-mode-hint"), schedulerModeMessage(normalized));
+        $("smart-sticky").checked = config.smart_sticky !== false;
+        $("smart-sticky-ttl").value = String(Number(config.smart_sticky_ttl_seconds) || SMART_DEFAULTS.smart_sticky_ttl_seconds);
+        $("smart-window").value = String(Number(config.smart_window_seconds) || SMART_DEFAULTS.smart_window_seconds);
+        $("smart-max-inflight").value = String(
+          Number(config.smart_max_inflight_per_profile) || SMART_DEFAULTS.smart_max_inflight_per_profile
+        );
+        setText(
+          $("smart-settings-hint"),
+          m("ui.smart_settings_hint_value", {
+            v0: $("smart-sticky-ttl").value,
+            v1: $("smart-window").value,
+            v2: $("smart-max-inflight").value
+          })
+        );
+      }
+
+      async function loadSchedulerSettings() {
+        const select = $("scheduler-mode");
+        if (!select || currentRole !== "admin") return;
+        select.disabled = true;
+        setText($("scheduler-mode-status"), m("ui.scheduler_mode_loading"));
+        $("scheduler-mode-status").className = "notice";
+        try {
+          const config = requireObject(
+            await api("GET", "/v0/management/plugins/cpa-key-billing/config", null, { raw: true }),
+            m("ui.scheduler_settings")
+          );
+          renderSchedulerSettings(config);
+          setText($("scheduler-mode-status"), "");
+        } catch (error) {
+          setText($("scheduler-mode-status"), error.message || m("ui.scheduler_mode_load_failed"));
+          $("scheduler-mode-status").className = "notice err show";
+        } finally { select.disabled = false; }
+      }
+
+      async function saveSchedulerSettings(patch) {
+        const select = $("scheduler-mode");
+        const status = $("scheduler-mode-status");
+        if (!select || !status) return;
+        select.disabled = true;
+        $("smart-sticky").disabled = true;
+        $("smart-sticky-ttl").disabled = true;
+        $("smart-window").disabled = true;
+        $("smart-max-inflight").disabled = true;
+        setText(status, m("ui.scheduler_mode_saving"));
+        status.className = "notice";
+        try {
+          await api("PATCH", "/v0/management/plugins/cpa-key-billing/config", patch, { raw: true });
+          await loadSchedulerSettings();
+          setText(status, m("ui.scheduler_mode_saved"));
+          status.className = "notice show ok";
+        } catch (error) {
+          setText(status, error.message || m("ui.scheduler_mode_save_failed"));
+          status.className = "notice err show";
+          await loadSchedulerSettings();
+        } finally {
+          select.disabled = false;
+          $("smart-sticky").disabled = false;
+          $("smart-sticky-ttl").disabled = false;
+          $("smart-window").disabled = false;
+          $("smart-max-inflight").disabled = false;
+        }
+      }
 
       function usd(value) {
         const amount = Number(value || 0);
@@ -4502,6 +4623,7 @@
           const tasks = [];
           if (!account || resources.account.profile.value?.tracked) {
             tasks.push(...page.groups.map((name) => loadDataGroup(account, name, reload)));
+            if (!account && page.query === "logs") tasks.push(loadSchedulerSettings());
             if (page.sources.includes(eventKeysQuery)) tasks.push(readEventKeys(reload));
             if (page.query === "analysis") {
               tasks.push(readAnalysis(account, reload));
@@ -5590,7 +5712,7 @@
           if (provider && file.category !== provider) return false;
           if (!search) return true;
           const currentPlan = ui.owner.authQuotas.get(file.auth_index)?.plan;
-          return [file.name, file.email, currentPlan, file.category].some((value) =>
+          return [file.name, file.email, file.workspace_name, currentPlan, file.category].some((value) =>
             String(value || "").toLocaleLowerCase().includes(search)
           );
         });
@@ -5671,9 +5793,10 @@
 
       function renderAuthResetCredits(file, result) {
         if (file.category !== "codex") return null;
-        const credits = result.rate_limit_reset_credits || [];
+        const source = result || file;
+        const credits = source.rate_limit_reset_credits || [];
         if (!credits.length) {
-          return result.rate_limit_reset_credits_unavailable
+          return source.rate_limit_reset_credits_unavailable
             ? el("div", { class: "muted small", text: m("ui.reset_credits_expiry_unavailable") })
             : null;
         }
@@ -5700,6 +5823,29 @@
         );
       }
 
+      function renderAuthUsage(usage) {
+        if (!usage || !Number(usage.requests)) return null;
+        const tokens = [
+          m("ui.input") + ": " + exactTokens(usage.input_tokens),
+          m("ui.cache_read") + ": " + exactTokens(usage.cache_read_tokens),
+          m("ui.cache_write") + ": " + exactTokens(usage.cache_write_tokens),
+          m("ui.output") + ": " + exactTokens(usage.output_tokens)
+        ].join(DISPLAY_SEPARATOR);
+        const results =
+          int(usage.successful) + DISPLAY_SEPARATOR + m("ui.succeeded") + ", " + int(usage.failed) + DISPLAY_SEPARATOR + m("ui.failed");
+        const last = usage.last_request_at ? when(usage.last_request_at) : "";
+        return el(
+          "div",
+          { class: "auth-quota-summary" },
+          el("span", { text: m("ui.recorded_usage") }),
+          el("span", { text: int(usage.requests) + DISPLAY_SEPARATOR + m("ui.requests") }),
+          el("span", { text: results }),
+          el("span", { text: tokens }),
+          el("span", { text: m("ui.cost_value", { v0: usd(usage.cost_usd) }) }),
+          last ? el("span", { text: m("ui.last_request_value", { v0: last }) }) : null
+        );
+      }
+
       function renderAuthFileQuota(file, account) {
         const owner = account ? accountUIState : adminUIState;
         const index = file.auth_index;
@@ -5709,13 +5855,16 @@
         const error = owner.authQuotaErrors.get(index);
         if (error) return el("div", { class: "auth-file-quota" }, el("div", { class: "auth-quota-error", text: error }));
         const result = owner.authQuotas.get(index);
-        if (!result) return null;
+        const usage = result?.usage || file.usage;
+        const source = result || file;
+        const hasCachedResetCredits = file.rate_limit_reset_credits_available_count != null || (file.rate_limit_reset_credits || []).length;
+        if (!result && !Number(usage?.requests) && !hasCachedResetCredits) return null;
         const summary = [];
         if (
-          result.rate_limit_reset_credits_available_count != null &&
-          Number.isFinite(Number(result.rate_limit_reset_credits_available_count))
+          source.rate_limit_reset_credits_available_count != null &&
+          Number.isFinite(Number(source.rate_limit_reset_credits_available_count))
         ) {
-          summary.push(el("span", { text: m("ui.available_resets_value", { v0: int(result.rate_limit_reset_credits_available_count) }) }));
+          summary.push(el("span", { text: m("ui.available_resets_value", { v0: int(source.rate_limit_reset_credits_available_count) }) }));
           if (file.category === "codex" && (!account || resources.account.profile.value?.can_reset_auth_quota === true)) {
             summary.push(
               el("button", {
@@ -5728,15 +5877,16 @@
             );
           }
         }
-        const rows = result.quota;
+        const rows = result?.quota || [];
         return el(
           "div",
           { class: "auth-file-quota" },
+          renderAuthUsage(usage),
           summary.length ? el("div", { class: "auth-quota-summary" }, summary) : null,
-          renderAuthResetCredits(file, result),
-          rows.length
+          renderAuthResetCredits(file, result || file),
+          result && rows.length
             ? el("div", { class: "auth-quota-list" }, rows.map(renderQuotaRow))
-            : el("div", { class: "muted small", text: m("ui.the_upstream_returned_no_displayable_quota") })
+            : result ? el("div", { class: "muted small", text: m("ui.the_upstream_returned_no_displayable_quota") }) : null
         );
       }
 
@@ -5758,7 +5908,7 @@
             const category = AUTH_CATEGORY_LABELS[file.category] || file.category || m("ui.unknown_2");
             const plan = authPlanLabel(file.category, ui.owner.authQuotas.get(file.auth_index)?.plan);
             const seenMeta = new Set();
-            const meta = [category, plan].filter((value) => {
+            const meta = [category, plan, file.workspace_name].filter((value) => {
               const key = String(value || "").trim().toLocaleLowerCase();
               if (!key || seenMeta.has(key)) return false;
               seenMeta.add(key);
@@ -5816,9 +5966,10 @@
         if (currentRole !== (account ? "account" : "admin") || (account && resources.account.profile.value?.can_reset_auth_quota !== true))
           return false;
         const owner = account ? accountUIState : adminUIState;
+        const quota = owner.authQuotas.get(file.auth_index) || file;
         return (
           file.category === "codex" && file.quota_supported && !file.disabled && !owner.authQuotaLoading.has(file.auth_index) &&
-          Number(owner.authQuotas.get(file.auth_index)?.rate_limit_reset_credits_available_count) > 0
+          Number(quota.rate_limit_reset_credits_available_count) > 0
         );
       }
 
@@ -5829,7 +5980,7 @@
         await openActionDialog(
           m("ui.reset_codex_quota"),
           m("ui.available_resets_value_use_one_reset_now", {
-            v0: int(owner.authQuotas.get(index).rate_limit_reset_credits_available_count),
+            v0: int((owner.authQuotas.get(index) || file).rate_limit_reset_credits_available_count),
             v1: file.name
           }),
           undefined,
@@ -6230,19 +6381,12 @@
                 el("button", {
                   class: "link",
                   text: m("ui.reset"),
-                  disabled: deleted || view.unlimited,
+                  disabled: deleted || view.unlimited || !view.windows.some((window) => window.period_seconds === 604800),
                   onclick: () =>
-                    openActionDialog(
-                      m("ui.reset_subscription_quota"),
-                      view.windows[0]?.cycle_anchor_at
-                        ? m("ui.clear_usage_in_all_windows_and_keep_the_scheduled_reset_times")
-                        : m("ui.all_quota_cycles_will_end_new_cycles_start_when_the_next_request_is_admitted"),
-                      undefined,
-                      async () => {
-                        await mutateAdmin("POST", "/keys/reset", { mode: "all", scopes: [view.scope] });
-                        notify(m("ui.subscription_quota_reset"));
-                      }
-                    )
+                    openActionDialog(m("ui.reset_seven_day_quota"), m("ui.reset_seven_day_quota_description"), undefined, async () => {
+                      await mutateAdmin("POST", "/keys/reset", { mode: "seven_day", scopes: [view.scope] });
+                      notify(m("ui.subscription_quota_reset"));
+                    })
                 }),
                 el("button", {
                   class: "link",
@@ -9262,10 +9406,20 @@
           tab.classList.toggle("active", active);
           tab.setAttribute("aria-selected", String(active));
         }
-        const visible = selected === "settings" ? new Set(["plans", "routes", "prices", "plugin-logs"]) : new Set([selected]);
-        for (const section of ["keys", "analysis", "plans", "routes", "prices", "request-events", "errors", "auth-files", "plugin-logs"]) {
-          $("tab-" + section).classList.toggle("hidden", !visible.has(section));
-        }
+        const visible =
+          selected === "settings" ? new Set(["plans", "routes", "prices", "scheduler-settings", "plugin-logs"]) : new Set([selected]);
+        for (const section of [
+          "keys",
+          "analysis",
+          "plans",
+          "routes",
+          "prices",
+          "request-events",
+          "errors",
+          "auth-files",
+          "scheduler-settings",
+          "plugin-logs"
+        ]) { $("tab-" + section).classList.toggle("hidden", !visible.has(section)); }
         $("shared-time-filter").classList.toggle("hidden", !["analysis", "request-events", "errors"].includes(selected));
         $("events-export").classList.toggle("hidden", !["request-events", "errors"].includes(selected));
         if (!["analysis", "request-events", "errors"].includes(selected)) { closeSharedTimePopover(false); }
@@ -9278,6 +9432,19 @@
           setAdminTab(tab.dataset.tab);
           guard(() => loadPage(false));
         };
+
+      $("scheduler-mode").addEventListener("change", () => guard(() => saveSchedulerSettings({ scheduler_mode: $("scheduler-mode").value }))
+      );
+      $("smart-sticky").addEventListener("change", () => guard(() => saveSchedulerSettings({ smart_sticky: $("smart-sticky").checked })));
+      $("smart-sticky-ttl").addEventListener("change", () =>
+        guard(() => saveSchedulerSettings({ smart_sticky_ttl_seconds: Number($("smart-sticky-ttl").value) }))
+      );
+      $("smart-window").addEventListener("change", () =>
+        guard(() => saveSchedulerSettings({ smart_window_seconds: Number($("smart-window").value) }))
+      );
+      $("smart-max-inflight").addEventListener("change", () =>
+        guard(() => saveSchedulerSettings({ smart_max_inflight_per_profile: Number($("smart-max-inflight").value) }))
+      );
 
       $("key-filter").addEventListener("input", renderKeys);
       $("keys-include-deleted").addEventListener("change", () => {

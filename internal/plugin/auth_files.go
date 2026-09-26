@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/rand"
 	"net/http"
 	"regexp"
 	"sort"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"cpa-key-billing/internal/billing"
 	"cpa-key-billing/internal/messages"
 )
 
@@ -46,16 +48,22 @@ type hostAuthFile struct {
 }
 
 type authFileView struct {
-	AuthIndex          string           `json:"auth_index"`
-	Name               string           `json:"name"`
-	Category           string           `json:"category"`
-	Email              string           `json:"email,omitempty"`
-	Disabled           bool             `json:"disabled"`
-	Unavailable        bool             `json:"unavailable"`
-	QuotaSupported     bool             `json:"quota_supported"`
-	QuotaReason        string           `json:"quota_unavailable_reason,omitempty"`
-	QuotaReasonMessage messages.Message `json:"quota_unavailable_message,omitzero"`
-	CacheRevision      string           `json:"cache_revision,omitempty"`
+	AuthIndex                           string                `json:"auth_index"`
+	Name                                string                `json:"name"`
+	Category                            string                `json:"category"`
+	Email                               string                `json:"email,omitempty"`
+	WorkspaceName                       string                `json:"workspace_name,omitempty"`
+	Disabled                            bool                  `json:"disabled"`
+	Unavailable                         bool                  `json:"unavailable"`
+	QuotaSupported                      bool                  `json:"quota_supported"`
+	QuotaReason                         string                `json:"quota_unavailable_reason,omitempty"`
+	QuotaReasonMessage                  messages.Message      `json:"quota_unavailable_message,omitzero"`
+	CacheRevision                       string                `json:"cache_revision,omitempty"`
+	Usage                               billing.AuthUsageView `json:"usage"`
+	RateLimitResetCreditsAvailableCount *int                  `json:"rate_limit_reset_credits_available_count,omitempty"`
+	RateLimitResetCredits               []resetCreditExpiry   `json:"rate_limit_reset_credits,omitempty"`
+	QuotaFetchedAt                      time.Time             `json:"quota_fetched_at,omitzero"`
+	QuotaNextFetchAt                    time.Time             `json:"quota_next_fetch_at,omitzero"`
 }
 
 type authFileListResponse struct {
@@ -98,14 +106,20 @@ type quotaRow struct {
 }
 
 type authQuotaResponse struct {
-	AuthRevision                        string              `json:"auth_revision,omitempty"`
-	FetchedAt                           time.Time           `json:"fetched_at"`
-	Plan                                string              `json:"plan,omitempty"`
-	RateLimitResetCreditsAvailableCount *int                `json:"rate_limit_reset_credits_available_count,omitempty"`
-	RateLimitResetCredits               []resetCreditExpiry `json:"rate_limit_reset_credits,omitempty"`
-	RateLimitResetCreditsUnavailable    bool                `json:"rate_limit_reset_credits_unavailable,omitempty"`
-	Quota                               []quotaRow          `json:"quota"`
+	AuthRevision                        string                `json:"auth_revision,omitempty"`
+	FetchedAt                           time.Time             `json:"fetched_at"`
+	Plan                                string                `json:"plan,omitempty"`
+	RateLimitResetCreditsAvailableCount *int                  `json:"rate_limit_reset_credits_available_count,omitempty"`
+	RateLimitResetCredits               []resetCreditExpiry   `json:"rate_limit_reset_credits,omitempty"`
+	RateLimitResetCreditsUnavailable    bool                  `json:"rate_limit_reset_credits_unavailable,omitempty"`
+	Quota                               []quotaRow            `json:"quota"`
+	Usage                               billing.AuthUsageView `json:"usage"`
 }
+
+const (
+	minAuthQuotaRefresh = 40 * time.Minute
+	maxAuthQuotaRefresh = 80 * time.Minute
+)
 
 type resetCreditExpiry struct {
 	ExpiresAt string `json:"expires_at"`
@@ -134,7 +148,93 @@ func (a *App) authQuota(req ManagementRequest, access viewAccess) ManagementResp
 	if errQuota != nil {
 		return viewDetailedError(access, http.StatusBadGateway, "quota_failed", errQuota)
 	}
+	if usage, errUsage := a.store.AuthUsage(selected.AuthIndex, authCategory(selected.Type)); errUsage == nil {
+		result.Usage = usage
+	} else {
+		a.store.AddPluginLog(billing.PluginLogError, "Failed to read persisted auth usage: %v", errUsage)
+	}
+	a.persistAuthQuotaResult(selected.AuthIndex, authCategory(selected.Type), &result, a.store.Now())
 	return viewJSON(access, http.StatusOK, result)
+}
+
+func nextAuthQuotaRefresh(now time.Time) time.Time {
+	return now.Add(minAuthQuotaRefresh + time.Duration(rand.Int63n(int64(maxAuthQuotaRefresh-minAuthQuotaRefresh)+1)))
+}
+
+func (a *App) persistAuthQuotaResult(authIndex, provider string, result *authQuotaResponse, now time.Time) {
+	if a == nil || a.store == nil || result == nil || strings.TrimSpace(authIndex) == "" || strings.TrimSpace(provider) == "" {
+		return
+	}
+	fetchedAt := result.FetchedAt
+	if fetchedAt.IsZero() {
+		fetchedAt = now
+	}
+	expirations := make([]string, 0, len(result.RateLimitResetCredits))
+	for _, credit := range result.RateLimitResetCredits {
+		if value := strings.TrimSpace(credit.ExpiresAt); value != "" {
+			expirations = append(expirations, value)
+		}
+	}
+	snapshot := billing.AuthQuotaSnapshot{
+		AuthIndex: authIndex, Provider: provider, FetchedAt: fetchedAt, NextFetchAt: nextAuthQuotaRefresh(now),
+		CreditExpirations: expirations,
+	}
+	if result.RateLimitResetCreditsAvailableCount != nil {
+		snapshot.AvailableCount = *result.RateLimitResetCreditsAvailableCount
+		snapshot.AvailableCountKnown = true
+	}
+	if errSave := a.store.SaveAuthQuota(snapshot); errSave != nil {
+		a.store.AddPluginLog(billing.PluginLogError, "Failed to persist auth quota snapshot: %v", errSave)
+	}
+}
+
+// maybeRefreshAuthQuota performs due refreshes synchronously during a host
+// call. The plugin deliberately owns no background timers or goroutines.
+func (a *App) maybeRefreshAuthQuota(authIndex, provider, authType string) {
+	if a == nil || a.store == nil || a.hostCaller == nil || strings.TrimSpace(authIndex) == "" ||
+		strings.TrimSpace(provider) == "" || strings.EqualFold(strings.TrimSpace(authType), "apikey") {
+		return
+	}
+	key := strings.TrimSpace(authIndex) + "\x00" + strings.ToLower(strings.TrimSpace(provider))
+	a.authQuotaMu.Lock()
+	if _, busy := a.authQuotaRefresh[key]; busy {
+		a.authQuotaMu.Unlock()
+		return
+	}
+	a.authQuotaRefresh[key] = struct{}{}
+	a.authQuotaMu.Unlock()
+	defer func() {
+		a.authQuotaMu.Lock()
+		delete(a.authQuotaRefresh, key)
+		a.authQuotaMu.Unlock()
+	}()
+
+	now := a.store.Now()
+	previous, found, errRead := a.store.AuthQuota(authIndex, provider)
+	if errRead != nil || found && now.Before(previous.NextFetchAt) {
+		return
+	}
+	files, errList := a.listHostAuthFiles()
+	if errList != nil {
+		return
+	}
+	for _, file := range files {
+		if file.AuthIndex != authIndex || strings.EqualFold(strings.TrimSpace(file.AccountType), "api_key") {
+			continue
+		}
+		category := authCategory(file.Type)
+		result, errFetch := a.fetchAuthQuota("", file, category)
+		if errFetch == nil {
+			a.persistAuthQuotaResult(authIndex, category, &result, now)
+		} else {
+			if !found {
+				previous = billing.AuthQuotaSnapshot{AuthIndex: authIndex, Provider: category}
+			}
+			previous.NextFetchAt = nextAuthQuotaRefresh(now)
+			_ = a.store.SaveAuthQuota(previous)
+		}
+		return
+	}
 }
 
 // Resource routes are GET-only. Require a reset ID header and preserve it on retries.
@@ -236,11 +336,43 @@ func (a *App) listAuthFiles(access viewAccess) ([]authFileView, error) {
 		}
 		category := authCategory(file.Type)
 		quotaSupported, quotaReason := authQuotaAvailability(file, category)
+		if quotaSupported {
+			if snapshot, found, errSnapshot := a.store.AuthQuota(file.AuthIndex, category); errSnapshot == nil && found &&
+				!a.store.Now().Before(snapshot.NextFetchAt) {
+				a.maybeRefreshAuthQuota(file.AuthIndex, category, file.AccountType)
+			}
+		}
+		workspaceName := ""
+		if category == "codex" {
+			workspaceName = a.authWorkspaceName(file)
+		}
+		usage := billing.AuthUsageView{}
+		if value, errUsage := a.store.AuthUsage(file.AuthIndex, category); errUsage == nil {
+			usage = value
+		} else {
+			a.store.AddPluginLog(billing.PluginLogError, "Failed to read persisted auth usage: %v", errUsage)
+		}
+		var resetCount *int
+		var resetCredits []resetCreditExpiry
+		var quotaFetchedAt, quotaNextFetchAt time.Time
+		if snapshot, found, errSnapshot := a.store.AuthQuota(file.AuthIndex, category); errSnapshot == nil && found {
+			quotaFetchedAt, quotaNextFetchAt = snapshot.FetchedAt, snapshot.NextFetchAt
+			if snapshot.AvailableCountKnown {
+				value := snapshot.AvailableCount
+				resetCount = &value
+			}
+			for _, expiresAt := range snapshot.CreditExpirations {
+				resetCredits = append(resetCredits, resetCreditExpiry{ExpiresAt: expiresAt})
+			}
+		}
 		views = append(views, authFileView{
 			AuthIndex: file.AuthIndex, Name: file.Name, Category: category, Email: cleanText(file.Email),
-			Disabled: file.Disabled, Unavailable: file.Unavailable,
+			WorkspaceName: workspaceName,
+			Disabled:      file.Disabled, Unavailable: file.Unavailable,
 			QuotaSupported: quotaSupported, QuotaReason: quotaReason, CacheRevision: authFileRevision(file),
-			QuotaReasonMessage: messages.Literal(quotaReason),
+			QuotaReasonMessage: messages.Literal(quotaReason), Usage: usage,
+			RateLimitResetCreditsAvailableCount: resetCount, RateLimitResetCredits: resetCredits,
+			QuotaFetchedAt: quotaFetchedAt, QuotaNextFetchAt: quotaNextFetchAt,
 		})
 	}
 	sort.SliceStable(views, func(i, j int) bool {
@@ -258,6 +390,30 @@ func (a *App) listAuthFiles(access viewAccess) ([]authFileView, error) {
 		return views[i].AuthIndex < views[j].AuthIndex
 	})
 	return views, nil
+}
+
+// authWorkspaceName reads only the non-secret workspace_name field from the
+// host-owned auth JSON. A missing field or an unavailable host callback is
+// intentionally treated as an empty display value.
+func (a *App) authWorkspaceName(file hostAuthFile) string {
+	if a == nil || a.hostCaller == nil || strings.TrimSpace(file.AuthIndex) == "" {
+		return ""
+	}
+	raw, errGet := a.hostCaller(hostAuthGet, map[string]string{"auth_index": file.AuthIndex})
+	if errGet != nil {
+		return ""
+	}
+	var response hostAuthGetResponse
+	if errDecode := json.Unmarshal(raw, &response); errDecode != nil {
+		return ""
+	}
+	var metadata struct {
+		WorkspaceName string `json:"workspace_name"`
+	}
+	if errDecode := json.Unmarshal(response.JSON, &metadata); errDecode != nil {
+		return ""
+	}
+	return cleanText(metadata.WorkspaceName)
 }
 
 func authQuotaAvailability(file hostAuthFile, category string) (bool, string) {

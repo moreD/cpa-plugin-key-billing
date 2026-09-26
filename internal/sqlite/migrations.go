@@ -40,6 +40,26 @@ func migrateToV17(tx *sql.Tx, version int) error {
 	return nil
 }
 
+func migrateToV18(tx *sql.Tx, version int) error {
+	if version <= 16 {
+		if err := migrateToV17(tx, version); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`CREATE TABLE auth_quota_snapshots (
+		auth_index TEXT NOT NULL,
+		provider TEXT NOT NULL,
+		fetched_at INTEGER NOT NULL DEFAULT 0,
+		next_fetch_at INTEGER NOT NULL DEFAULT 0,
+		available_count INTEGER NOT NULL DEFAULT -1,
+		credits_json TEXT NOT NULL DEFAULT '[]',
+		PRIMARY KEY (auth_index, provider)
+	)`); err != nil {
+		return fmt.Errorf("Create auth quota snapshots table: %w", err)
+	}
+	return nil
+}
+
 // Rows recorded before schema 17 carry no upstream response report.
 func migrateUpstreamResponseReports(tx *sql.Tx) error {
 	if _, err := tx.Exec(`

@@ -16,11 +16,10 @@ import (
 
 func TestAuthFilesExposeOnlyDisplayFieldsInCategoryOrder(t *testing.T) {
 	app := newConfiguredApp(t)
-	app.SetHostCaller(func(method string, _ any) (json.RawMessage, error) {
-		if method != hostAuthList {
-			t.Fatalf("host method = %q, want %q", method, hostAuthList)
-		}
-		return json.RawMessage(`{"files":[
+	app.SetHostCaller(func(method string, payload any) (json.RawMessage, error) {
+		switch method {
+		case hostAuthList:
+			return json.RawMessage(`{"files":[
 			{"name":"disk-only.json","type":"codex"},
 			{"auth_index":"api-1","name":"openai-api-key.json","type":"openai","provider":"openai","account_type":"api_key","account":"sk-upstream-secret"},
 			{"auth_index":"x-2","name":"zeta.json","type":"xai","email":"z@example.com","disabled":true,"path":"/secret/zeta.json","account":"sk-upstream-secret","id_token":"secret"},
@@ -28,7 +27,13 @@ func TestAuthFilesExposeOnlyDisplayFieldsInCategoryOrder(t *testing.T) {
 			{"auth_index":"c-1","name":"Alpha.json","type":"codex","email":"user@example.com","modtime":"2026-09-02T01:02:03Z","id_token":{"planType":"prolite"}},
 			{"auth_index":"a-1","name":"antigravity.json","type":"antigravity"},
 			{"auth_index":"cl-1","name":"claude.json","type":"claude"}
-		]}`), nil
+			]}`), nil
+		case hostAuthGet:
+			return json.RawMessage(`{"json":{"workspace_name":"Amber's Workspace","access_token":"do-not-return"}}`), nil
+		default:
+			t.Fatalf("unexpected host method = %q (payload=%v)", method, payload)
+			return nil, nil
+		}
 	})
 	response := app.authFiles(viewAccess{})
 	if response.StatusCode != http.StatusOK {
@@ -53,6 +58,9 @@ func TestAuthFilesExposeOnlyDisplayFieldsInCategoryOrder(t *testing.T) {
 	if payload.Files[2].Email != "user@example.com" {
 		t.Fatalf("email = %q, want CPA email", payload.Files[2].Email)
 	}
+	if payload.Files[2].WorkspaceName != "Amber's Workspace" {
+		t.Fatalf("workspace name = %q, want Amber's Workspace", payload.Files[2].WorkspaceName)
+	}
 	if payload.Files[4].QuotaSupported || payload.Files[4].QuotaReason != "Auth file is disabled" {
 		t.Fatalf("disabled quota availability = %+v", payload.Files[4])
 	}
@@ -63,6 +71,38 @@ func TestAuthFilesExposeOnlyDisplayFieldsInCategoryOrder(t *testing.T) {
 		if strings.Contains(encoded, forbidden) {
 			t.Fatalf("response leaked %q: %s", forbidden, encoded)
 		}
+	}
+}
+
+func TestAuthFilesExposePersistedUsageByAuthIndex(t *testing.T) {
+	app := newConfiguredApp(t)
+	publishUsageRecord(t, app, UsageRecord{
+		Provider: "codex", Model: "gpt-5.5", Alias: "gpt-5.5", APIKey: accountTestKeyA,
+		AuthIndex: "codex-usage", AuthType: "oauth", Source: "user@example.com", RequestedAt: app.store.Now(),
+		Detail: UsageDetail{InputTokens: 100, CacheReadTokens: 20, OutputTokens: 30, TotalTokens: 130},
+	})
+	app.SetHostCaller(func(method string, _ any) (json.RawMessage, error) {
+		switch method {
+		case hostAuthList:
+			return json.RawMessage(`{"files":[{"auth_index":"codex-usage","name":"codex.json","type":"codex"}]}`), nil
+		case hostAuthGet:
+			return json.RawMessage(`{"json":{}}`), nil
+		default:
+			t.Fatalf("unexpected host method = %q", method)
+			return nil, nil
+		}
+	})
+	response := app.authFiles(viewAccess{})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.StatusCode, response.Body)
+	}
+	var payload authFileListResponse
+	if err := json.Unmarshal(response.Body, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Files) != 1 || payload.Files[0].Usage.Requests != 1 || payload.Files[0].Usage.TotalTokens != 130 ||
+		payload.Files[0].Usage.InputTokens != 80 || payload.Files[0].Usage.CacheReadTokens != 20 || payload.Files[0].Usage.OutputTokens != 30 {
+		t.Fatalf("auth usage = %+v", payload.Files)
 	}
 }
 
@@ -83,6 +123,9 @@ func TestAccountAuthFilesRequireTrackedAPIKey(t *testing.T) {
 	hostCalls := 0
 	app.SetHostCaller(func(method string, _ any) (json.RawMessage, error) {
 		hostCalls++
+		if method == hostAuthGet {
+			return json.RawMessage(`{"json":{}}`), nil
+		}
 		if method != hostAuthList {
 			t.Fatalf("host method = %q, want %q", method, hostAuthList)
 		}
@@ -141,7 +184,7 @@ func TestAccountAuthFilesFollowCredentialRouting(t *testing.T) {
 				t.Fatal(errRoute)
 			}
 			hostGetCalls := 0
-			app.SetHostCaller(func(method string, _ any) (json.RawMessage, error) {
+			app.SetHostCaller(func(method string, payload any) (json.RawMessage, error) {
 				switch method {
 				case hostAuthList:
 					return json.RawMessage(`{"files":[
@@ -151,7 +194,9 @@ func TestAccountAuthFilesFollowCredentialRouting(t *testing.T) {
 				{"id":"config-codex-exact","auth_index":"config-exact","name":"configured-exact","type":"codex","provider":"codex","source":"config","runtime_only":true}
 			]}`), nil
 				case hostAuthGet:
-					hostGetCalls++
+					if request, ok := payload.(map[string]string); ok && request["auth_index"] == "codex-denied" {
+						hostGetCalls++
+					}
 					return nil, nil
 				default:
 					t.Fatalf("unexpected host method %q", method)
@@ -233,6 +278,9 @@ func TestAccountAuthQuotaUsesPhysicalCredentialWithoutForwardingAPIKey(t *testin
 func TestRuntimeOnlyAuthFileDisablesQuotaWithoutLeakingDetails(t *testing.T) {
 	app := newConfiguredApp(t)
 	app.SetHostCaller(func(method string, _ any) (json.RawMessage, error) {
+		if method == hostAuthGet {
+			return json.RawMessage(`{"json":{}}`), nil
+		}
 		if method != hostAuthList {
 			t.Fatalf("host method = %q", method)
 		}
@@ -360,6 +408,11 @@ func TestCodexQuotaPreservesAdditionalDynamicWindows(t *testing.T) {
 	}
 	if len(result.RateLimitResetCredits) != 1 || result.RateLimitResetCredits[0].ExpiresAt != "2026-10-04T02:27:00Z" {
 		t.Fatalf("reset credits = %+v", result.RateLimitResetCredits)
+	}
+	snapshot, found, errSnapshot := app.store.AuthQuota("codex-1", "codex")
+	if errSnapshot != nil || !found || !snapshot.AvailableCountKnown || snapshot.AvailableCount != 1 ||
+		len(snapshot.CreditExpirations) != 1 || snapshot.CreditExpirations[0] != "2026-10-04T02:27:00Z" || snapshot.NextFetchAt.IsZero() {
+		t.Fatalf("persisted reset credits = %+v, found=%t, err=%v", snapshot, found, errSnapshot)
 	}
 	if result.Quota[0].RemainingPercent == nil || *result.Quota[0].RemainingPercent != 62 {
 		t.Fatalf("remaining percent = %+v", result.Quota[0].RemainingPercent)
@@ -758,8 +811,12 @@ func TestAuthQuotaReset(t *testing.T) {
 			if tc.want == 200 || tc.want == 502 {
 				wantCalls = 1
 			}
-			if reads != wantCalls || consumes != wantCalls {
-				t.Fatalf("credential reads = %d, resets = %d; want %d", reads, consumes, wantCalls)
+			wantReads := wantCalls
+			if tc.name == "masked name" {
+				wantReads++
+			}
+			if reads != wantReads || consumes != wantCalls {
+				t.Fatalf("credential reads = %d, resets = %d; want reads=%d resets=%d", reads, consumes, wantReads, wantCalls)
 			}
 			if (tc.want == 400 || tc.want == 401 || tc.want == 403) && hostCalls != 0 {
 				t.Fatalf("rejected request made %d host calls", hostCalls)

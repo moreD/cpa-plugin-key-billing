@@ -212,6 +212,7 @@ func (a *App) handleUsage(raw []byte) ([]byte, error) {
 	} else {
 		a.store.RecordUsage(event)
 	}
+	a.maybeRefreshAuthQuota(record.AuthIndex, record.Provider, record.AuthType)
 	a.observeCredentialUsage(record.AuthIndex, record.AuthType, record.Source, scope)
 	return OKEnvelope(struct{}{})
 }

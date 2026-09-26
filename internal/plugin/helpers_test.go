@@ -75,6 +75,7 @@ func testConfigYAML(t *testing.T, enabled bool) []byte {
 	t.Helper()
 	return []byte("enabled: " + strconv.FormatBool(enabled) +
 		"\ndebug: true" +
+		"\nscheduler_mode: regular" +
 		"\nstate_file: \"" + filepath.Join(t.TempDir(), "state.db") + "\"\n")
 }
 

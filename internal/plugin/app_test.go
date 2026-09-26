@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -40,10 +41,42 @@ func TestRegisterDeclaresExpectedCapabilities(t *testing.T) {
 	for _, field := range registration.Metadata.ConfigFields {
 		fields[field.Name] = field
 	}
-	if fields["state_file"].Type != "string" || fields["debug"].Type != "boolean" ||
+	if fields["scheduler_mode"].Type != "enum" || !reflect.DeepEqual(fields["scheduler_mode"].EnumValues, []string{"smart", "regular", "disabled"}) || fields["state_file"].Type != "string" || fields["debug"].Type != "boolean" ||
 		fields["codex_fast_mode_billing"].Type != "boolean" || fields["mask_api_key_view_emails"].Type != "boolean" ||
 		fields["allow_api_key_quota_reset"].Type != "boolean" || fields["enabled"].Name != "" {
 		t.Fatalf("ConfigFields = %+v", registration.Metadata.ConfigFields)
+	}
+}
+
+func TestRegisterOmitsSchedulerWhenDisabled(t *testing.T) {
+	app := newTestApp(t)
+	t.Cleanup(app.Shutdown)
+	raw, err := app.HandleMethod(MethodPluginRegister, mustMarshal(t, LifecycleRequest{
+		ConfigYAML: []byte("enabled: true\nscheduler_mode: disabled\nstate_file: \"" + t.TempDir() + "/state.db\"\n"),
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var registration Registration
+	decodeResult(t, raw, &registration)
+	if registration.Capabilities.Scheduler {
+		t.Fatalf("capabilities = %+v, scheduler should be omitted when disabled", registration.Capabilities)
+	}
+}
+
+func TestRegisterSmartSchedulerRequestsAllPriorityTiers(t *testing.T) {
+	app := newTestApp(t)
+	t.Cleanup(app.Shutdown)
+	raw, err := app.HandleMethod(MethodPluginRegister, mustMarshal(t, LifecycleRequest{
+		ConfigYAML: []byte("enabled: true\nscheduler_mode: smart\nstate_file: \"" + t.TempDir() + "/state.db\"\n"),
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var registration Registration
+	decodeResult(t, raw, &registration)
+	if !registration.Capabilities.Scheduler || !registration.Capabilities.SchedulerAcrossPriorities {
+		t.Fatalf("capabilities = %+v, smart scheduler should receive all priority tiers", registration.Capabilities)
 	}
 }
 

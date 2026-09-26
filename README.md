@@ -100,6 +100,32 @@ plugins:
 
 重启 CLIProxyAPI 后，在管理中心打开「API Key Billing」。确认模型定价后，创建订阅计划并绑定需要限制的 API Key。
 
+### 迁移旧版调度器和 API Key 额度
+
+如果 CPA 配置中仍有独立的 `smart-load-balancer` 插件和
+`api-keys[].cost-limits`，切换到本插件前运行：
+
+```sh
+python3 scripts/migrate_legacy_settings.py --config /path/to/config.yaml
+```
+
+脚本会生成可审核的 `config.yaml.migrated.yaml` 和计划清单。清单会把旧的
+`7d` 美元额度转换为 7 天订阅计划，并用不可逆的 caller-scope 哈希绑定
+API Key；旧的 `cost-limits` 字段会被移除。旧的 `12h` 额度按要求忽略。
+独立的 smart-load-balancer 插件及其 registry source 会从新配置移除，旧调度器会替换为内置
+smart scheduler，并保留 24 小时 sticky 窗口和每个 profile 8 个请求的默认值。
+
+审核并启用新配置后，可以通过正在运行的插件同步 Key 和计划：
+
+```sh
+CPA_MANAGEMENT_KEY='your-management-key' \
+  python3 scripts/migrate_legacy_settings.py \
+    --config /path/to/config.yaml.migrated.yaml \
+    --manifest /path/to/config.yaml.migration.json --apply
+```
+
+只有明确需要自动替换原文件时才使用 `--in-place`；脚本会先生成带时间戳的备份。
+
 ## 页面访问
 
 管理员可以从 CLIProxyAPI 管理中心的「API Key Billing」菜单进入，也可以直接打开：

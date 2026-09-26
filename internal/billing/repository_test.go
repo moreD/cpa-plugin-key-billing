@@ -14,6 +14,7 @@ type memoryRepository struct {
 	requestEvents   []RequestEvent
 	requestErrors   []RequestErrorEvent
 	pluginLogs      []PluginLog
+	authQuotas      map[string]AuthQuotaSnapshot
 	fail            error
 	closeFail       error
 }
@@ -125,7 +126,9 @@ func (r *memoryRepository) RequestEvents(query RequestEventQuery, since time.Tim
 	}
 	sort.SliceStable(events, func(i, j int) bool { return events[i].At.After(events[j].At) })
 	for _, entry := range events {
-		if entry.At.Before(since) || (query.Scope != "" && entry.Scope != query.Scope) {
+		if entry.At.Before(since) || (query.Scope != "" && entry.Scope != query.Scope) ||
+			(query.AuthIndex != "" && entry.AuthIndex != query.AuthIndex) ||
+			(query.Provider != "" && entry.Provider != query.Provider) {
 			continue
 		}
 		row := RequestEventRow{RequestEvent: entry}
@@ -136,6 +139,56 @@ func (r *memoryRepository) RequestEvents(query RequestEventQuery, since time.Tim
 	}
 	view.Total = len(view.Entries)
 	return view, nil
+}
+
+func (r *memoryRepository) AuthUsage(authIndex, provider string, since time.Time) (AuthUsageView, error) {
+	usage := AuthUsageView{}
+	for _, entry := range append(append([]RequestEvent{}, r.requestEvents...), errorEvents(r.requestErrors)...) {
+		if entry.At.Before(since) || entry.AuthIndex != authIndex || provider != "" && entry.Provider != provider {
+			continue
+		}
+		usage.Requests++
+		if entry.Failed {
+			usage.Failed++
+		} else {
+			usage.Successful++
+		}
+		usage.InputTokens += entry.Cost.UncachedInputTokens
+		usage.CacheReadTokens += entry.Cost.CacheReadTokens
+		usage.CacheWriteTokens += entry.Cost.CacheWriteTokens
+		usage.OutputTokens += entry.Cost.BilledOutputTokens
+		usage.TotalTokens += entry.Cost.UncachedInputTokens + entry.Cost.CacheReadTokens + entry.Cost.CacheWriteTokens + entry.Cost.BilledOutputTokens
+		usage.CostUSD += entry.Cost.TotalUSD
+		if entry.At.After(usage.LastRequestAt) {
+			usage.LastRequestAt = entry.At
+		}
+	}
+	return usage, nil
+}
+
+func (r *memoryRepository) AuthQuota(authIndex, provider string) (AuthQuotaSnapshot, bool, error) {
+	key := authIndex + "\x00" + provider
+	if r.authQuotas == nil {
+		return AuthQuotaSnapshot{}, false, nil
+	}
+	value, ok := r.authQuotas[key]
+	return value, ok, nil
+}
+
+func (r *memoryRepository) SaveAuthQuota(snapshot AuthQuotaSnapshot) error {
+	if r.authQuotas == nil {
+		r.authQuotas = make(map[string]AuthQuotaSnapshot)
+	}
+	r.authQuotas[snapshot.AuthIndex+"\x00"+snapshot.Provider] = snapshot
+	return nil
+}
+
+func errorEvents(entries []RequestErrorEvent) []RequestEvent {
+	result := make([]RequestEvent, 0, len(entries))
+	for _, entry := range entries {
+		result = append(result, entry.Event)
+	}
+	return result
 }
 
 func (r *memoryRepository) RequestErrors(query RequestErrorQuery, since time.Time) (RequestErrorView, error) {

@@ -11,8 +11,6 @@ Source paths are relative to this repository's root:
 ## Required Checks
 
 - **Before committing:** Run `gofmt -l .`; format any listed files and rerun until the output is empty.
-- **Frontend changes:** Start `python3 scripts/frontend_dummy_backend.py --port 18765` (not the default port) and verify affected desktop and narrow-screen layouts with Playwright, beyond static checks.
-- **Frontend regression scripts:** Store JavaScript scripts used with `playwright-cli` for browser regression testing in a temporary directory, never in the project's `scripts/` directory.
 - **Billing changes:** Run `scripts/e2e_cpa_billing.sh v7.2.143` after modifying any billing behavior, including usage parsing, pricing, quota enforcement, or failure reporting.
 
 ## UI Formatting

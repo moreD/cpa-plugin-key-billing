@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"strings"
 	"sync"
 
 	"cpa-key-billing/internal/billing"
 	"cpa-key-billing/internal/sqlite"
+	smartbalancer "github.com/nitansde/smart-load-balancer/balancer"
 )
 
 type App struct {
@@ -21,8 +23,11 @@ type App struct {
 	credentialsByRawID    map[string]string
 	credentialRefsByIndex map[string]string
 	scheduler             subsetScheduler
+	smartBalancer         *smartbalancer.Balancer
 	pending               map[string]pendingRouteLog
 	pendingSequence       uint64
+	authQuotaMu           sync.Mutex
+	authQuotaRefresh      map[string]struct{}
 }
 
 func (a *App) SetHostCaller(caller HostCaller) {
@@ -41,6 +46,8 @@ func newApp(store *billing.Store) *App {
 		credentialsByRawID:    make(map[string]string),
 		credentialRefsByIndex: make(map[string]string),
 		pending:               make(map[string]pendingRouteLog),
+		authQuotaRefresh:      make(map[string]struct{}),
+		smartBalancer:         smartbalancer.New(),
 	}
 }
 
@@ -71,7 +78,7 @@ func (a *App) handleMethod(method string, request []byte) ([]byte, error) {
 			a.store.AddPluginLog(billing.PluginLogError, "Failed to apply plugin configuration: %v", errConfigure)
 			return nil, errConfigure
 		}
-		return OKEnvelope(registration())
+		return OKEnvelope(registration(a.store.SchedulerMode()))
 	case MethodRequestInterceptBefore:
 		return a.interceptBeforeAuth(request)
 	case MethodRequestInterceptAfter:
@@ -128,7 +135,8 @@ func (a *App) configure(raw []byte) error {
 	return nil
 }
 
-func registration() Registration {
+func registration(schedulerMode string) Registration {
+	schedulerMode = strings.ToLower(strings.TrimSpace(schedulerMode))
 	return Registration{
 		SchemaVersion: SchemaVersion,
 		Metadata: Metadata{
@@ -138,6 +146,16 @@ func registration() Registration {
 			GitHubRepository: GitHubRepository,
 			Logo:             pluginLogo,
 			ConfigFields: []ConfigField{
+				{
+					Name:        "scheduler_mode",
+					Type:        "enum",
+					EnumValues:  []string{"smart", "regular", "disabled"},
+					Description: "Credential scheduler: smart uses the pinned smart load balancer, regular uses billing routing, and disabled leaves scheduling to CPA.",
+				},
+				{Name: "smart_sticky", Type: "boolean", Description: "Keep each client on one upstream auth while it remains eligible."},
+				{Name: "smart_sticky_ttl_seconds", Type: "integer", Description: "Idle sticky assignment lifetime in seconds."},
+				{Name: "smart_window_seconds", Type: "integer", Description: "Recent-pick window used to estimate per-auth load, in seconds."},
+				{Name: "smart_max_inflight_per_profile", Type: "integer", Description: "Per-auth recent-pick threshold before sticky requests spill over."},
 				{
 					Name:        "debug",
 					Type:        "boolean",
@@ -166,11 +184,12 @@ func registration() Registration {
 			},
 		},
 		Capabilities: Capabilities{
-			RequestInterceptor:     true,
-			RequestLifecyclePlugin: true,
-			UsagePlugin:            true,
-			ManagementAPI:          true,
-			Scheduler:              true,
+			RequestInterceptor:        true,
+			RequestLifecyclePlugin:    true,
+			UsagePlugin:               true,
+			ManagementAPI:             true,
+			Scheduler:                 schedulerMode != "disabled",
+			SchedulerAcrossPriorities: schedulerMode == "smart",
 		},
 	}
 }

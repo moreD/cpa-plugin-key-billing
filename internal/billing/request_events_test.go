@@ -47,3 +47,21 @@ func TestRequestEventsKeepTheRetentionWindow(t *testing.T) {
 		t.Fatalf("stored %d entries, want the stale ones dropped on append", len(repo.requestEvents))
 	}
 }
+
+func TestAuthUsageAggregatesPersistedRequestEvents(t *testing.T) {
+	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	store := newAccountStore(t, now)
+	store.RecordUsage(subsetEvent("scope-a", now))
+	store.RecordUsageError(subsetEvent("scope-a", now.Add(time.Minute)), RequestError{StatusCode: 502})
+
+	usage, err := store.AuthUsage("auth-codex", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.Requests != 2 || usage.Successful != 1 || usage.Failed != 1 ||
+		usage.InputTokens != 1000 || usage.CacheReadTokens != 800 || usage.CacheWriteTokens != 200 ||
+		usage.OutputTokens != 1000 || usage.TotalTokens != 3000 || usage.LastRequestAt != now.Add(time.Minute) {
+		t.Fatalf("usage = %+v", usage)
+	}
+	assertClose(t, "CostUSD", usage.CostUSD, 2*wantSubsetCost)
+}

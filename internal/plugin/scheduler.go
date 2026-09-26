@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"cpa-key-billing/internal/billing"
+	smartbalancer "github.com/nitansde/smart-load-balancer/balancer"
 )
 
 const maxPoolsPerKey = 256
@@ -145,6 +146,9 @@ func (a *App) pickCredential(raw []byte) ([]byte, error) {
 	if a == nil || a.store == nil || !a.store.Enabled() {
 		return OKEnvelope(SchedulerPickResponse{Handled: false})
 	}
+	if a.store.SchedulerMode() == "disabled" {
+		return OKEnvelope(SchedulerPickResponse{Handled: false})
+	}
 	if metadataString(req.Options.Metadata, MetadataSource) == SourcePluginHostModelCallback {
 		return OKEnvelope(SchedulerPickResponse{Handled: false})
 	}
@@ -160,6 +164,9 @@ func (a *App) pickCredential(raw []byte) ([]byte, error) {
 	decision := a.store.ResolveRouting(scope, req.Model, requestedModel)
 	if decision.ConfigurationError != "" {
 		return ErrorEnvelope("routing_configuration_error", decision.ConfigurationError, http.StatusServiceUnavailable), nil
+	}
+	if a.store.SchedulerMode() == "smart" {
+		return a.pickSmartCredential(scope, req, decision)
 	}
 	if !decision.RestrictsCredentials() {
 		return OKEnvelope(SchedulerPickResponse{Handled: false})
@@ -181,4 +188,34 @@ func (a *App) pickCredential(raw []byte) ([]byte, error) {
 		return ErrorEnvelope("no_routed_credential", noRoutedCredentialMessage, http.StatusServiceUnavailable), nil
 	}
 	return OKEnvelope(SchedulerPickResponse{AuthID: id, Handled: true})
+}
+
+func (a *App) pickSmartCredential(scope string, req SchedulerPickRequest, decision billing.RoutingDecision) ([]byte, error) {
+	allowed := make([]SchedulerAuthCandidate, 0, len(req.Candidates))
+	for _, candidate := range req.Candidates {
+		if candidateAllowed(candidate, decision) {
+			allowed = append(allowed, candidate)
+		}
+	}
+	if len(allowed) == 0 {
+		return ErrorEnvelope("no_routed_credential", noRoutedCredentialMessage, http.StatusServiceUnavailable), nil
+	}
+	candidates := make([]smartbalancer.Candidate, 0, len(allowed))
+	for _, candidate := range allowed {
+		candidates = append(candidates, smartbalancer.Candidate{
+			ID: candidate.ID, Provider: candidate.Provider, Priority: candidate.Priority, Status: candidate.Status,
+		})
+	}
+	config := smartbalancer.DefaultConfig()
+	pluginConfig := a.store.Config()
+	config.Sticky = pluginConfig.SmartSticky
+	config.StickyTTLSeconds = pluginConfig.SmartStickyTTLSeconds
+	config.WindowSeconds = pluginConfig.SmartWindowSeconds
+	config.MaxInflightPerProfile = pluginConfig.SmartMaxInflight
+	config = config.WithDefaults()
+	selected, handled := a.smartBalancer.PickWithQuota(scope, candidates, config, nil)
+	if !handled || selected == "" {
+		return OKEnvelope(SchedulerPickResponse{Handled: false})
+	}
+	return OKEnvelope(SchedulerPickResponse{AuthID: selected, Handled: true})
 }

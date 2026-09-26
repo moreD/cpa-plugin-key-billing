@@ -41,6 +41,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ inputs.checkout_ref || github.ref }}
+          submodules: recursive
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -50,7 +51,7 @@ jobs:
 
       - name: Check formatting
         run: |
-          gofmt -l . | tee /tmp/gofmt-files
+          gofmt -l cmd internal | tee /tmp/gofmt-files
           test ! -s /tmp/gofmt-files
 
       - name: Check module files

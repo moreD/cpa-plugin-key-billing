@@ -157,6 +157,7 @@ func TestFreshSchemaVersionAndTables(t *testing.T) {
 		"api_keys": true, "routes": true, "plans": true,
 		"prices": true, "request_events": true, "config_credentials": true,
 		"request_errors": true, "plugin_logs": true, "reference_prices_metadata": true, "reference_prices": true,
+		"auth_quota_snapshots": true,
 	}
 	rows, err := database.db.Query(`SELECT name FROM sqlite_master
 		WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`)

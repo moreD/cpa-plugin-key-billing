@@ -12,7 +12,11 @@ var indexes = map[string][]index{
 	"request_events": {
 		{"at", "at, id, failed"},
 		{"scope_at", "scope, at, id, failed"},
+		{"auth_index_at", "auth_index, at"},
 		{"model_at", eventModelSQL + ", at"},
+	},
+	"auth_quota_snapshots": {
+		{"next_fetch_at", "next_fetch_at"},
 	},
 	"request_errors": {
 		{"status", "status_code, error_type"},
@@ -140,6 +144,16 @@ CREATE TABLE request_errors (
 	status_code      INTEGER NOT NULL DEFAULT 0,
 	error_type       TEXT    NOT NULL DEFAULT '',
 	body             TEXT    NOT NULL DEFAULT ''
+);
+
+CREATE TABLE auth_quota_snapshots (
+	auth_index          TEXT    NOT NULL,
+	provider            TEXT    NOT NULL,
+	fetched_at          INTEGER NOT NULL DEFAULT 0,
+	next_fetch_at       INTEGER NOT NULL DEFAULT 0,
+	available_count     INTEGER NOT NULL DEFAULT -1,
+	credits_json        TEXT    NOT NULL DEFAULT '[]',
+	PRIMARY KEY (auth_index, provider)
 );
 
 CREATE TABLE plugin_logs (
