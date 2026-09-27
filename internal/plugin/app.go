@@ -111,7 +111,7 @@ func (a *App) Shutdown() {
 	a.store.Close()
 }
 
-const authQuotaTimerInterval = 10 * time.Minute
+const authQuotaTimerInterval = time.Hour
 
 func (a *App) startAuthQuotaTimer() {
 	a.authQuotaTimerMu.Lock()

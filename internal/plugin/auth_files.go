@@ -118,8 +118,10 @@ type authQuotaResponse struct {
 }
 
 const (
-	minAuthQuotaRefresh = 40 * time.Minute
-	maxAuthQuotaRefresh = 80 * time.Minute
+	minAuthQuotaRefreshNoUsage = 40 * time.Minute
+	maxAuthQuotaRefreshNoUsage = 80 * time.Minute
+	minAuthQuotaRefreshUsage   = 1200 * time.Minute
+	maxAuthQuotaRefreshUsage   = 1600 * time.Minute
 )
 
 type resetCreditExpiry struct {
@@ -158,8 +160,22 @@ func (a *App) authQuota(req ManagementRequest, access viewAccess) ManagementResp
 	return viewJSON(access, http.StatusOK, result)
 }
 
-func nextAuthQuotaRefresh(now time.Time) time.Time {
-	return now.Add(minAuthQuotaRefresh + time.Duration(rand.Int63n(int64(maxAuthQuotaRefresh-minAuthQuotaRefresh)+1)))
+func nextAuthQuotaRefresh(now time.Time, hasUsage bool) time.Time {
+	minRefresh, maxRefresh := minAuthQuotaRefreshNoUsage, maxAuthQuotaRefreshNoUsage
+	if hasUsage {
+		minRefresh, maxRefresh = minAuthQuotaRefreshUsage, maxAuthQuotaRefreshUsage
+	}
+	return now.Add(minRefresh + time.Duration(rand.Int63n(int64(maxRefresh-minRefresh)+1)))
+}
+
+func (a *App) nextAuthQuotaRefresh(authIndex, provider string, now time.Time) time.Time {
+	hasUsage := false
+	if a != nil && a.store != nil {
+		if usage, errUsage := a.store.AuthUsage(authIndex, provider); errUsage == nil {
+			hasUsage = usage.Requests > 0
+		}
+	}
+	return nextAuthQuotaRefresh(now, hasUsage)
 }
 
 func (a *App) persistAuthQuotaResult(authIndex, provider string, result *authQuotaResponse, now time.Time) {
@@ -177,7 +193,7 @@ func (a *App) persistAuthQuotaResult(authIndex, provider string, result *authQuo
 		}
 	}
 	snapshot := billing.AuthQuotaSnapshot{
-		AuthIndex: authIndex, Provider: provider, FetchedAt: fetchedAt, NextFetchAt: nextAuthQuotaRefresh(now),
+		AuthIndex: authIndex, Provider: provider, FetchedAt: fetchedAt, NextFetchAt: a.nextAuthQuotaRefresh(authIndex, provider, now),
 		CreditExpirations: expirations, Quota: quotaRowsForStorage(result.Quota),
 	}
 	if result.RateLimitResetCreditsAvailableCount != nil {
@@ -202,7 +218,7 @@ func (a *App) persistCodexResponseQuota(authIndex, provider string, headers http
 		return
 	}
 	if !found {
-		snapshot = billing.AuthQuotaSnapshot{AuthIndex: authIndex, Provider: "codex", NextFetchAt: nextAuthQuotaRefresh(now)}
+		snapshot = billing.AuthQuotaSnapshot{AuthIndex: authIndex, Provider: "codex", NextFetchAt: a.nextAuthQuotaRefresh(authIndex, "codex", now)}
 	}
 	snapshot.FetchedAt = now
 	snapshot.Quota = mergeAuthQuotaRows(snapshot.Quota, rows)
@@ -343,7 +359,7 @@ func (a *App) maybeRefreshAuthQuota(authIndex, provider, authType string) {
 			if !found {
 				previous = billing.AuthQuotaSnapshot{AuthIndex: authIndex, Provider: category}
 			}
-			previous.NextFetchAt = nextAuthQuotaRefresh(now)
+			previous.NextFetchAt = a.nextAuthQuotaRefresh(authIndex, category, now)
 			_ = a.store.SaveAuthQuota(previous)
 		}
 		return
