@@ -171,7 +171,7 @@ func nextAuthQuotaRefresh(now time.Time, hasUsage bool) time.Time {
 func (a *App) nextAuthQuotaRefresh(authIndex, provider string, now time.Time) time.Time {
 	hasUsage := false
 	if a != nil && a.store != nil {
-		if usage, errUsage := a.store.AuthUsage(authIndex, provider); errUsage == nil {
+		if usage, errUsage := a.store.AuthUsage(authIndex, ""); errUsage == nil {
 			hasUsage = usage.Requests > 0
 		}
 	}
@@ -311,7 +311,7 @@ func (a *App) refreshDueAuthQuotas() {
 			continue
 		}
 		hasUsage := false
-		if usage, errUsage := a.store.AuthUsage(file.AuthIndex, category); errUsage == nil {
+		if usage, errUsage := a.store.AuthUsage(file.AuthIndex, ""); errUsage == nil {
 			hasUsage = usage.Requests > 0
 		}
 		if found && !authQuotaRefreshScheduleMatches(snapshot, now, hasUsage) {
