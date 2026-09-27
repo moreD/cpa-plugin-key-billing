@@ -189,8 +189,39 @@ func (a *App) persistAuthQuotaResult(authIndex, provider string, result *authQuo
 	}
 }
 
-// maybeRefreshAuthQuota performs due refreshes synchronously during a host
-// call. The plugin deliberately owns no background timers or goroutines.
+// refreshDueAuthQuotas runs from the backend timer and refreshes only auth
+// files whose persisted quota snapshot is absent or past its randomized
+// refresh time.
+func (a *App) refreshDueAuthQuotas() {
+	if a == nil || a.store == nil || a.hostCaller == nil {
+		return
+	}
+	files, errList := a.listHostAuthFiles()
+	if errList != nil {
+		return
+	}
+	now := a.store.Now()
+	for _, file := range files {
+		if strings.TrimSpace(file.AuthIndex) == "" || strings.EqualFold(strings.TrimSpace(file.AccountType), "api_key") {
+			continue
+		}
+		category := authCategory(file.Type)
+		if supported, _ := authQuotaAvailability(file, category); !supported {
+			continue
+		}
+		snapshot, found, errSnapshot := a.store.AuthQuota(file.AuthIndex, category)
+		if errSnapshot != nil {
+			continue
+		}
+		if found && now.Before(snapshot.NextFetchAt) {
+			continue
+		}
+		a.maybeRefreshAuthQuota(file.AuthIndex, category, file.AccountType)
+	}
+}
+
+// maybeRefreshAuthQuota performs a due refresh synchronously during a host
+// call or from the backend quota timer.
 func (a *App) maybeRefreshAuthQuota(authIndex, provider, authType string) {
 	if a == nil || a.store == nil || a.hostCaller == nil || strings.TrimSpace(authIndex) == "" ||
 		strings.TrimSpace(provider) == "" || strings.EqualFold(strings.TrimSpace(authType), "apikey") {

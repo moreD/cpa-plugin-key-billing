@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"cpa-key-billing/internal/billing"
 	"cpa-key-billing/internal/sqlite"
@@ -28,10 +29,15 @@ type App struct {
 	pendingSequence       uint64
 	authQuotaMu           sync.Mutex
 	authQuotaRefresh      map[string]struct{}
+	authQuotaTimerMu      sync.Mutex
+	authQuotaTimerStop    chan struct{}
+	authQuotaTimerDone    chan struct{}
+	authQuotaTimerClosed  bool
 }
 
 func (a *App) SetHostCaller(caller HostCaller) {
 	a.hostCaller = caller
+	a.startAuthQuotaTimer()
 }
 
 func NewApp() *App {
@@ -102,7 +108,47 @@ func (a *App) Shutdown() {
 	if a == nil || a.store == nil {
 		return
 	}
+	a.stopAuthQuotaTimer()
 	a.store.Close()
+}
+
+const authQuotaTimerInterval = 10 * time.Minute
+
+func (a *App) startAuthQuotaTimer() {
+	a.authQuotaTimerMu.Lock()
+	defer a.authQuotaTimerMu.Unlock()
+	if a.authQuotaTimerClosed || a.authQuotaTimerStop != nil || a.hostCaller == nil {
+		return
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	a.authQuotaTimerStop, a.authQuotaTimerDone = stop, done
+	go func() {
+		ticker := time.NewTicker(authQuotaTimerInterval)
+		defer ticker.Stop()
+		defer close(done)
+		for {
+			select {
+			case <-ticker.C:
+				a.refreshDueAuthQuotas()
+			case <-stop:
+				return
+			}
+		}
+	}()
+}
+
+func (a *App) stopAuthQuotaTimer() {
+	a.authQuotaTimerMu.Lock()
+	defer a.authQuotaTimerMu.Unlock()
+	a.authQuotaTimerClosed = true
+	if a.authQuotaTimerStop == nil {
+		return
+	}
+	close(a.authQuotaTimerStop)
+	<-a.authQuotaTimerDone
+	a.authQuotaTimerStop = nil
+	a.authQuotaTimerDone = nil
 }
 
 func (a *App) configure(raw []byte) error {

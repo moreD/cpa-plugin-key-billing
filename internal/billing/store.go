@@ -12,9 +12,6 @@ import (
 
 // cfgMu serializes Configure/Close. mu guards state, config and repository
 // access, including mutations and their database writes.
-//
-// Work must finish synchronously within host calls: background activity in this
-// embedded Go runtime can conflict with CLIProxyAPI's runtime.
 type Store struct {
 	cfgMu           sync.Mutex
 	referencePrices atomic.Pointer[referencePriceManager]
