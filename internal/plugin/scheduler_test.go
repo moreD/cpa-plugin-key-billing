@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"cpa-key-billing/internal/billing"
 )
@@ -326,6 +327,114 @@ func TestSmartSchedulerPicksCandidateAcrossPriorityTiers(t *testing.T) {
 	decodeResult(t, raw, &response)
 	if !response.Handled || response.AuthID == "" {
 		t.Fatalf("response = %+v, smart scheduler should select a candidate", response)
+	}
+}
+
+func TestSmartSchedulerPrefersAuthWhoseLongQuotaResetPassed(t *testing.T) {
+	app := newTestApp(t)
+	t.Cleanup(app.Shutdown)
+	config := []byte("enabled: true\nscheduler_mode: smart\nstate_file: \"" + t.TempDir() + "/state.db\"\n")
+	if _, err := app.HandleMethod(MethodPluginRegister, mustMarshal(t, LifecycleRequest{ConfigYAML: config})); err != nil {
+		t.Fatal(err)
+	}
+	now := app.store.Now()
+	app.rememberAuthIndices([]hostAuthFile{
+		{ID: "auth-reset", AuthIndex: "index-reset"},
+		{ID: "auth-later", AuthIndex: "index-later"},
+	})
+	past := now.Add(-time.Hour).UTC().Format(time.RFC3339)
+	future := now.Add(20 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	if err := app.store.SaveAuthQuota(billing.AuthQuotaSnapshot{
+		AuthIndex: "index-reset", Provider: "codex", FetchedAt: now.Add(-2 * time.Hour),
+		Quota: []billing.AuthQuotaRow{{Label: "Weekly limit", Used: floatPointer(40), ResetAt: past}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.store.SaveAuthQuota(billing.AuthQuotaSnapshot{
+		AuthIndex: "index-later", Provider: "codex", FetchedAt: now,
+		Quota: []billing.AuthQuotaRow{{Label: "Weekly limit", Used: floatPointer(40), ResetAt: future}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := app.HandleMethod(MethodSchedulerPick, mustMarshal(t, schedulerRequest(billing.CallerScope("sk-reset-test"),
+		SchedulerAuthCandidate{ID: "auth-later", Provider: "codex"},
+		SchedulerAuthCandidate{ID: "auth-reset", Provider: "codex"},
+	)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response SchedulerPickResponse
+	decodeResult(t, raw, &response)
+	if !response.Handled || response.AuthID != "auth-reset" {
+		t.Fatalf("response=%+v, want the auth whose long reset has passed", response)
+	}
+}
+
+func TestSmartSchedulerSkipsAuthBlockedByUsageQuotaSignal(t *testing.T) {
+	app := newTestApp(t)
+	t.Cleanup(app.Shutdown)
+	config := []byte("enabled: true\nscheduler_mode: smart\nstate_file: \"" + t.TempDir() + "/state.db\"\n")
+	if _, err := app.HandleMethod(MethodPluginRegister, mustMarshal(t, LifecycleRequest{ConfigYAML: config})); err != nil {
+		t.Fatal(err)
+	}
+	app.rememberAuthIndices([]hostAuthFile{
+		{ID: "auth-blocked", AuthIndex: "index-blocked"},
+		{ID: "auth-available", AuthIndex: "index-available"},
+	})
+	publishUsageRecord(t, app, UsageRecord{
+		Provider: "codex", APIKey: "sk-smart-ledger", AuthIndex: "index-blocked", AuthType: "oauth",
+		Failed: true, Failure: UsageFailure{StatusCode: 429, Body: "rate limit exceeded"},
+	})
+	raw, err := app.HandleMethod(MethodSchedulerPick, mustMarshal(t, schedulerRequest(billing.CallerScope("sk-smart-ledger"),
+		SchedulerAuthCandidate{ID: "auth-blocked", Provider: "codex"},
+		SchedulerAuthCandidate{ID: "auth-available", Provider: "codex"},
+	)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response SchedulerPickResponse
+	decodeResult(t, raw, &response)
+	if !response.Handled || response.AuthID != "auth-available" {
+		t.Fatalf("response=%+v, want the unblocked auth", response)
+	}
+}
+
+func TestSmartSchedulerBorrowsRealRequestForFreshAuth(t *testing.T) {
+	app := newTestApp(t)
+	t.Cleanup(app.Shutdown)
+	config := []byte("enabled: true\nscheduler_mode: smart\nstate_file: \"" + t.TempDir() + "/state.db\"\n")
+	if _, err := app.HandleMethod(MethodPluginRegister, mustMarshal(t, LifecycleRequest{ConfigYAML: config})); err != nil {
+		t.Fatal(err)
+	}
+	app.smartDivert.Timeout = time.Nanosecond
+	app.rememberAuthIndices([]hostAuthFile{{ID: "auth-fresh", AuthIndex: "index-fresh"}, {ID: "auth-known", AuthIndex: "index-known"}})
+	now := app.store.Now()
+	if err := app.store.SaveAuthQuota(billing.AuthQuotaSnapshot{
+		AuthIndex: "index-known", Provider: "codex", FetchedAt: now,
+		Quota: []billing.AuthQuotaRow{{Label: "Weekly limit", Used: floatPointer(20), ResetAt: now.Add(24 * time.Hour).UTC().Format(time.RFC3339)}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	first, err := app.HandleMethod(MethodSchedulerPick, mustMarshal(t, schedulerRequest(billing.CallerScope("sk-borrow-prime"),
+		SchedulerAuthCandidate{ID: "auth-known", Provider: "codex"},
+		SchedulerAuthCandidate{ID: "auth-fresh", Provider: "codex"},
+	)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var firstResponse SchedulerPickResponse
+	decodeResult(t, first, &firstResponse)
+	raw, err := app.HandleMethod(MethodSchedulerPick, mustMarshal(t, schedulerRequest(billing.CallerScope("sk-borrow-test"),
+		SchedulerAuthCandidate{ID: "auth-known", Provider: "codex"},
+		SchedulerAuthCandidate{ID: "auth-fresh", Provider: "codex"},
+	)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response SchedulerPickResponse
+	decodeResult(t, raw, &response)
+	if !response.Handled || response.AuthID != "auth-fresh" {
+		t.Fatalf("response=%+v, pending=%d, want the fresh auth to receive the borrowed request", response, app.smartDivert.Pending.Len())
 	}
 }
 

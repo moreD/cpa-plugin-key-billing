@@ -83,6 +83,8 @@ func (a *App) observeRouteCredential(requestID, credentialID, credentialIndex st
 	defer a.routingMu.Unlock()
 	if ref := a.credentialsByRawID[credentialID]; ref != "" && credentialIndex != "" {
 		a.credentialRefsByIndex[credentialIndex] = ref
+		a.credentialIDByIndex[credentialIndex] = credentialID
+		a.authIndexByCredential[credentialID] = credentialIndex
 	}
 	if requestID == "" {
 		return

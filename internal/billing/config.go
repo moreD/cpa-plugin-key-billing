@@ -12,17 +12,20 @@ import (
 const DefaultStateFile = "plugins/cpa-key-billing-state-v1.db"
 
 type Config struct {
-	Enabled               bool   `yaml:"enabled"`
-	Debug                 bool   `yaml:"debug"`
-	StateFile             string `yaml:"state_file"`
-	SchedulerMode         string `yaml:"scheduler_mode"`
-	SmartSticky           bool   `yaml:"smart_sticky"`
-	SmartStickyTTLSeconds int    `yaml:"smart_sticky_ttl_seconds"`
-	SmartWindowSeconds    int    `yaml:"smart_window_seconds"`
-	SmartMaxInflight      int    `yaml:"smart_max_inflight_per_profile"`
-	CodexFastModeBilling  bool   `yaml:"codex_fast_mode_billing"`
-	MaskAPIKeyViewEmails  bool   `yaml:"mask_api_key_view_emails"`
-	AllowAPIKeyQuotaReset bool   `yaml:"allow_api_key_quota_reset"`
+	Enabled               bool     `yaml:"enabled"`
+	Debug                 bool     `yaml:"debug"`
+	StateFile             string   `yaml:"state_file"`
+	SchedulerMode         string   `yaml:"scheduler_mode"`
+	SmartSticky           bool     `yaml:"smart_sticky"`
+	SmartStickyTTLSeconds int      `yaml:"smart_sticky_ttl_seconds"`
+	SmartWindowSeconds    int      `yaml:"smart_window_seconds"`
+	SmartMaxInflight      int      `yaml:"smart_max_inflight_per_profile"`
+	SmartFiveHourBoost    bool     `yaml:"smart_five_hour_boost"`
+	SmartQuotaPriorities  []string `yaml:"smart_quota_priorities"`
+	SmartProviders        []string `yaml:"smart_providers"`
+	CodexFastModeBilling  bool     `yaml:"codex_fast_mode_billing"`
+	MaskAPIKeyViewEmails  bool     `yaml:"mask_api_key_view_emails"`
+	AllowAPIKeyQuotaReset bool     `yaml:"allow_api_key_quota_reset"`
 }
 
 func DefaultConfig() Config {
@@ -95,5 +98,30 @@ func (c Config) normalized() Config {
 	if c.SmartMaxInflight > 10000 {
 		c.SmartMaxInflight = 10000
 	}
+	c.SmartProviders = normalizedSmartValues(c.SmartProviders, true)
+	c.SmartQuotaPriorities = normalizedSmartValues(c.SmartQuotaPriorities, false)
 	return c
+}
+
+func normalizedSmartValues(values []string, lower bool) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if lower {
+			value = strings.ToLower(value)
+		}
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }

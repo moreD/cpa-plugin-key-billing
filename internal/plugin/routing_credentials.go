@@ -168,6 +168,27 @@ func (a *App) refreshCredentialInventory() error {
 	return nil
 }
 
+// rememberAuthIndices keeps the host scheduler's credential IDs connected to
+// the stable auth indexes used by the billing quota tables. CPA exposes both
+// values through host.auth.list, but they are intentionally different IDs.
+func (a *App) rememberAuthIndices(files []hostAuthFile) {
+	if a == nil {
+		return
+	}
+	a.routingMu.Lock()
+	defer a.routingMu.Unlock()
+	for _, file := range files {
+		id := strings.TrimSpace(file.ID)
+		index := strings.TrimSpace(file.AuthIndex)
+		if id == "" || index == "" {
+			continue
+		}
+		a.authIndexByCredential[id] = index
+		a.credentialIDByIndex[index] = id
+		a.credentialRefsByIndex[index] = billing.CredentialFingerprint(id)
+	}
+}
+
 func (a *App) observeCandidates(candidates []SchedulerAuthCandidate) {
 	a.routingMu.Lock()
 	defer a.routingMu.Unlock()
@@ -194,6 +215,11 @@ func (a *App) observeCandidates(candidates []SchedulerAuthCandidate) {
 		}
 		a.credentials[ref] = credentialView{Ref: ref, Source: source, Provider: provider, DisplayName: name, DisplayMessage: detail, Status: candidate.Status}
 		a.credentialsByRawID[id] = ref
+		if index := strings.TrimSpace(candidate.Attributes["auth_index"]); index != "" {
+			a.authIndexByCredential[id] = index
+			a.credentialIDByIndex[index] = id
+			a.credentialRefsByIndex[index] = ref
+		}
 	}
 }
 

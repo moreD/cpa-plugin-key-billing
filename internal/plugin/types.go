@@ -107,6 +107,7 @@ type Capabilities struct {
 type SchedulerPickRequest struct {
 	Model   string `json:"Model"`
 	Options struct {
+		Headers  http.Header    `json:"Headers"`
 		Metadata map[string]any `json:"Metadata"`
 	} `json:"Options"`
 	Candidates []SchedulerAuthCandidate `json:"Candidates"`

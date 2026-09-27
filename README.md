@@ -89,6 +89,9 @@ plugins:
       codex_fast_mode_billing: false # 开启后，Codex 的 priority 请求按 2.5 倍计费
       mask_api_key_view_emails: false # 对 API Key 查询页面返回的邮箱进行掩码脱敏
       allow_api_key_quota_reset: false # 允许 API Key 用户重置可访问的 Codex 认证文件额度，消耗上游重置次数
+      smart_quota_priorities: [] # 可选：按优先顺序填写智能调度的 auth ID
+      smart_providers: [] # 可选：限制智能调度处理的 provider
+      smart_five_hour_boost: false # 用一次合适的真实请求启动闲置 5 小时窗口的倒计时
       state_file: "plugins/cpa-key-billing-state-v1.db"
 ```
 
@@ -229,6 +232,8 @@ http(s)://<CLIProxyAPI 地址>/v0/resource/plugins/cpa-key-billing/ui#account
 ```
 
 ## 计费与订阅规则
+
+当 `scheduler_mode` 为 `smart` 时，内置调度器沿用 smart-load-balancer 的行为：保持每个 Key 的绑定，优先使用长窗口更早重置的 profile，跳过额度信号标记为阻塞的 profile，并借用一次合适的真实请求刷新过期或全新的 profile。它不会生成独立探测请求。`smart_quota_priorities` 和 `smart_five_hour_boost` 是可选高级配置。
 
 - 未绑定订阅计划的 API Key 只统计用量，不限制额度。
 - 订阅计划可设置多个自定义额度窗口，每个窗口可单独或组合限制金额、Token、请求数。

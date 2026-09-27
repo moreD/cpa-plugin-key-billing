@@ -212,8 +212,10 @@ func (a *App) pickSmartCredential(scope string, req SchedulerPickRequest, decisi
 	config.StickyTTLSeconds = pluginConfig.SmartStickyTTLSeconds
 	config.WindowSeconds = pluginConfig.SmartWindowSeconds
 	config.MaxInflightPerProfile = pluginConfig.SmartMaxInflight
+	config.QuotaPriorities = append([]string(nil), pluginConfig.SmartQuotaPriorities...)
+	config.Providers = append([]string(nil), pluginConfig.SmartProviders...)
 	config = config.WithDefaults()
-	selected, handled := a.smartBalancer.PickWithQuota(scope, candidates, config, nil)
+	selected, handled := a.smartBalancer.PickWithQuota(scope, candidates, config, &billingQuotaResolver{app: a, now: a.store.Now})
 	if !handled || selected == "" {
 		return OKEnvelope(SchedulerPickResponse{Handled: false})
 	}

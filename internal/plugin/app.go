@@ -12,6 +12,7 @@ import (
 	"cpa-key-billing/internal/billing"
 	"cpa-key-billing/internal/sqlite"
 	smartbalancer "github.com/nitansde/smart-load-balancer/balancer"
+	smartquota "github.com/nitansde/smart-load-balancer/quota"
 )
 
 type App struct {
@@ -23,8 +24,12 @@ type App struct {
 	credentials           map[string]credentialView
 	credentialsByRawID    map[string]string
 	credentialRefsByIndex map[string]string
+	credentialIDByIndex   map[string]string
+	authIndexByCredential map[string]string
 	scheduler             subsetScheduler
 	smartBalancer         *smartbalancer.Balancer
+	smartDivert           *smartbalancer.DivertState
+	smartLedger           *smartquota.Ledger
 	pending               map[string]pendingRouteLog
 	pendingSequence       uint64
 	authQuotaMu           sync.Mutex
@@ -44,16 +49,22 @@ func NewApp() *App {
 }
 
 func newApp(store *billing.Store) *App {
-	return &App{
+	app := &App{
 		store:                 store,
 		admissions:            make(map[string]*requestAdmission),
 		credentials:           make(map[string]credentialView),
 		credentialsByRawID:    make(map[string]string),
 		credentialRefsByIndex: make(map[string]string),
+		credentialIDByIndex:   make(map[string]string),
+		authIndexByCredential: make(map[string]string),
 		pending:               make(map[string]pendingRouteLog),
 		authQuotaRefresh:      make(map[string]struct{}),
 		smartBalancer:         smartbalancer.New(),
+		smartDivert:           smartbalancer.NewDivertState(),
+		smartLedger:           smartquota.NewLedger(),
 	}
+	app.smartBalancer.SetDivertState(app.smartDivert)
+	return app
 }
 
 func openRepository(path string) (billing.Repository, error) {
@@ -178,6 +189,11 @@ func (a *App) configure(raw []byte) error {
 	}
 	// Refresh records its result; a download failure does not disable custom prices.
 	_, _ = a.store.EnsureReferencePrices()
+	// Populate the runtime-ID to stable-auth-index map before the first
+	// scheduler call. The timer also refreshes this mapping periodically.
+	if a.hostCaller != nil {
+		_, _ = a.listHostAuthFiles()
+	}
 	a.startAuthQuotaTimer()
 	return nil
 }
@@ -203,6 +219,7 @@ func registration(schedulerMode string) Registration {
 				{Name: "smart_sticky_ttl_seconds", Type: "integer", Description: "Idle sticky assignment lifetime in seconds."},
 				{Name: "smart_window_seconds", Type: "integer", Description: "Recent-pick window used to estimate per-auth load, in seconds."},
 				{Name: "smart_max_inflight_per_profile", Type: "integer", Description: "Per-auth recent-pick threshold before sticky requests spill over."},
+				{Name: "smart_five_hour_boost", Type: "boolean", Description: "Borrow one suitable real request for an idle 5-hour window whose countdown has not started."},
 				{
 					Name:        "debug",
 					Type:        "boolean",

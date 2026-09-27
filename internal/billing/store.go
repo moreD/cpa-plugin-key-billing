@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -79,7 +80,7 @@ func (s *Store) Configure(cfg Config) error {
 
 	if currentPath == path {
 		s.mu.Lock()
-		changed := s.cfg != normalized
+		changed := !reflect.DeepEqual(s.cfg, normalized)
 		s.cfg = normalized
 		s.mu.Unlock()
 		if changed {

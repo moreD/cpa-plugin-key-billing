@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"cpa-key-billing/internal/billing"
+	smartquota "github.com/nitansde/smart-load-balancer/quota"
 )
 
 // Bound the retry hint so clients periodically recheck quota availability.
@@ -183,6 +184,7 @@ func (a *App) handleUsage(raw []byte) ([]byte, error) {
 		return OKEnvelope(struct{}{})
 	}
 	scope := billing.CallerScope(record.APIKey)
+	breakdown := usageBreakdown(record)
 	var recordError billing.RequestError
 	if record.Failed {
 		recordError = usageFailureDetails(record.Failure)
@@ -204,7 +206,7 @@ func (a *App) handleUsage(raw []byte) ([]byte, error) {
 		RequestedAt:         record.RequestedAt,
 		Latency:             record.Latency,
 		TTFT:                record.TTFT,
-		Breakdown:           usageBreakdown(record),
+		Breakdown:           breakdown,
 		At:                  a.store.Now(),
 	}
 	if record.Failed {
@@ -212,7 +214,33 @@ func (a *App) handleUsage(raw []byte) ([]byte, error) {
 	} else {
 		a.store.RecordUsage(event)
 	}
+	authID := a.schedulerAuthID(record.AuthIndex)
+	observedAt := record.RequestedAt
+	if observedAt.IsZero() {
+		observedAt = a.store.Now()
+	}
+	a.smartLedger.Observe(smartquota.UsageObservation{
+		AuthID: authID, Provider: record.Provider, TotalTokens: breakdown.TotalTokens,
+		Failed: record.Failed, StatusCode: record.Failure.StatusCode, FailureBody: record.Failure.Body,
+		ResponseHeaders: record.ResponseHeaders, ObservedAt: observedAt,
+	})
+	if !record.Failed {
+		a.smartDivert.Stats.Observe(scope, record.Detail.InputTokens)
+	}
+	harvested := false
+	if strings.EqualFold(strings.TrimSpace(record.Provider), "codex") {
+		harvested = len(codexQuotaRowsFromHeaders(record.ResponseHeaders, a.store.Now())) > 0
+	}
 	a.persistCodexResponseQuota(record.AuthIndex, record.Provider, record.ResponseHeaders, a.store.Now())
+	if harvested || (record.Failed && func() bool {
+		entry, ok := a.smartLedger.Get(authID)
+		return ok && entry.Blocked(a.store.Now())
+	}()) {
+		a.smartDivert.Pending.Clear(authID)
+		if authID != strings.TrimSpace(record.AuthIndex) {
+			a.smartDivert.Pending.Clear(strings.TrimSpace(record.AuthIndex))
+		}
+	}
 	a.maybeRefreshAuthQuota(record.AuthIndex, record.Provider, record.AuthType)
 	a.observeCredentialUsage(record.AuthIndex, record.AuthType, record.Source, scope)
 	return OKEnvelope(struct{}{})

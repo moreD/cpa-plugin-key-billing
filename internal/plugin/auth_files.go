@@ -641,6 +641,7 @@ func (a *App) listHostAuthFiles() ([]hostAuthFile, error) {
 	if errDecode := json.Unmarshal(raw, &response); errDecode != nil {
 		return nil, messages.Errorf("Parse auth file list: %w", errDecode)
 	}
+	a.rememberAuthIndices(response.Files)
 	return response.Files, nil
 }
 

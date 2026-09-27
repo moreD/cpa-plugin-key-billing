@@ -91,6 +91,9 @@ plugins:
       codex_fast_mode_billing: false # Charge 2.5× for Codex priority requests
       mask_api_key_view_emails: false # Mask email addresses in API key account views
       allow_api_key_quota_reset: false # Allow API key users to reset accessible Codex auth file quotas using upstream reset credits
+      smart_quota_priorities: [] # Optional auth IDs, in preferred order, for smart scheduling
+      smart_providers: [] # Optional provider allowlist for smart scheduling
+      smart_five_hour_boost: false # Borrow one suitable real request to start an idle 5-hour countdown
       state_file: "plugins/cpa-key-billing-state-v1.db"
 ```
 
@@ -242,6 +245,13 @@ http(s)://<CLIProxyAPI address>/v0/resource/plugins/cpa-key-billing/ui#account
 ```
 
 ## Billing and quotas
+
+When `scheduler_mode` is `smart`, the embedded scheduler uses the upstream
+smart-load-balancer behavior: it keeps per-key affinity, prefers profiles whose
+long quota reset is sooner, skips profiles blocked by quota signals, and borrows
+one suitable real request to refresh a stale or new profile. It does not create
+synthetic probe requests. `smart_quota_priorities` and `smart_five_hour_boost`
+are optional advanced settings.
 
 - Keys without a subscription plan still have their usage recorded, but have no subscription quota limit.
 - A plan can contain multiple quota windows. Each window can limit spending in USD, tokens, requests, or any combination of the three.
