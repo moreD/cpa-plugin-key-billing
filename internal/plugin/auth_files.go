@@ -189,6 +189,87 @@ func (a *App) persistAuthQuotaResult(authIndex, provider string, result *authQuo
 	}
 }
 
+func (a *App) persistCodexResponseQuota(authIndex, provider string, headers http.Header, now time.Time) {
+	if a == nil || a.store == nil || !strings.EqualFold(strings.TrimSpace(provider), "codex") || strings.TrimSpace(authIndex) == "" {
+		return
+	}
+	rows := codexQuotaRowsFromHeaders(headers, now)
+	if len(rows) == 0 {
+		return
+	}
+	snapshot, found, errSnapshot := a.store.AuthQuota(authIndex, "codex")
+	if errSnapshot != nil {
+		return
+	}
+	if !found {
+		snapshot = billing.AuthQuotaSnapshot{AuthIndex: authIndex, Provider: "codex", NextFetchAt: nextAuthQuotaRefresh(now)}
+	}
+	snapshot.FetchedAt = now
+	snapshot.Quota = mergeAuthQuotaRows(snapshot.Quota, rows)
+	if errSave := a.store.SaveAuthQuota(snapshot); errSave != nil {
+		a.store.AddPluginLog(billing.PluginLogError, "Failed to persist Codex response quota: %v", errSave)
+	}
+}
+
+func mergeAuthQuotaRows(existing, updates []billing.AuthQuotaRow) []billing.AuthQuotaRow {
+	merged := append([]billing.AuthQuotaRow(nil), existing...)
+	for _, update := range updates {
+		found := false
+		for index := range merged {
+			if merged[index].Label == update.Label && merged[index].GroupLabel == update.GroupLabel {
+				merged[index] = update
+				found = true
+				break
+			}
+		}
+		if !found {
+			merged = append(merged, update)
+		}
+	}
+	return merged
+}
+
+func codexQuotaRowsFromHeaders(headers http.Header, now time.Time) []billing.AuthQuotaRow {
+	if headers == nil {
+		return nil
+	}
+	rows := make([]billing.AuthQuotaRow, 0, 2)
+	appendWindow := func(prefix, labelPrefix, role string) {
+		used, errUsed := strconv.ParseFloat(strings.TrimSpace(headers.Get(prefix+role+"-Used-Percent")), 64)
+		minutes, errMinutes := strconv.ParseInt(strings.TrimSpace(headers.Get(prefix+role+"-Window-Minutes")), 10, 64)
+		if errUsed != nil || errMinutes != nil || minutes <= 0 || used < 0 || used > 100 {
+			return
+		}
+		label := codexQuotaWindowLabel(minutes)
+		if label == "" {
+			label = fmt.Sprintf("%d-minute limit", minutes)
+		}
+		row := billing.AuthQuotaRow{
+			Label: labelPrefix + label, RemainingPercent: floatPointer(100 - used), Used: floatPointer(used), Limit: floatPointer(100),
+		}
+		if resetAt, errResetAt := strconv.ParseInt(strings.TrimSpace(headers.Get(prefix+role+"-Reset-At")), 10, 64); errResetAt == nil && resetAt > 0 {
+			row.ResetAt = time.Unix(resetAt, 0).UTC().Format(time.RFC3339)
+		} else if resetAfter, errResetAfter := strconv.ParseInt(strings.TrimSpace(headers.Get(prefix+role+"-Reset-After-Seconds")), 10, 64); errResetAfter == nil && resetAfter >= 0 {
+			row.ResetAt = now.Add(time.Duration(resetAfter) * time.Second).UTC().Format(time.RFC3339)
+		}
+		rows = append(rows, row)
+	}
+	appendWindow("X-Codex-", "", "Primary")
+	appendWindow("X-Codex-", "", "Secondary")
+	return rows
+}
+
+func codexQuotaWindowLabel(minutes int64) string {
+	switch minutes {
+	case 5 * 60:
+		return "5-hour limit"
+	case 7 * 24 * 60:
+		return "Weekly limit"
+	default:
+		return ""
+	}
+}
+
 // refreshDueAuthQuotas runs from the backend timer and refreshes only auth
 // files whose persisted quota snapshot is absent or past its randomized
 // refresh time.

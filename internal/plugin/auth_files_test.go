@@ -116,6 +116,29 @@ func TestAuthFilesExposePersistedUsageByAuthIndex(t *testing.T) {
 	}
 }
 
+func TestCodexResponseQuotaIsMergedIntoAuthSnapshot(t *testing.T) {
+	app := newConfiguredApp(t)
+	now := app.store.Now()
+	app.persistCodexResponseQuota("codex-response", "codex", http.Header{
+		"X-Codex-Primary-Used-Percent":          {"24"},
+		"X-Codex-Primary-Window-Minutes":        {"10080"},
+		"X-Codex-Primary-Reset-After-Seconds":   {"7200"},
+		"X-Codex-Secondary-Used-Percent":        {"61"},
+		"X-Codex-Secondary-Window-Minutes":      {"300"},
+		"X-Codex-Secondary-Reset-After-Seconds": {"900"},
+	}, now)
+	snapshot, found, errSnapshot := app.store.AuthQuota("codex-response", "codex")
+	if errSnapshot != nil || !found || len(snapshot.Quota) != 2 {
+		t.Fatalf("snapshot = %+v, found=%t, err=%v", snapshot, found, errSnapshot)
+	}
+	if snapshot.Quota[0].Label != "Weekly limit" || snapshot.Quota[0].RemainingPercent == nil || *snapshot.Quota[0].RemainingPercent != 76 {
+		t.Fatalf("weekly quota = %+v", snapshot.Quota[0])
+	}
+	if snapshot.Quota[1].Label != "5-hour limit" || snapshot.Quota[1].ResetAt == "" {
+		t.Fatalf("five-hour quota = %+v", snapshot.Quota[1])
+	}
+}
+
 func TestNormalizeCodexPlan(t *testing.T) {
 	tests := map[string]string{
 		"plus": "plus", " PRO ": "pro-20x", "prolite": "pro-5x", "pro-lite": "pro-5x",

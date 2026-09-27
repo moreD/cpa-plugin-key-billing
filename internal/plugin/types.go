@@ -18,7 +18,7 @@ const (
 const (
 	PluginID   = "cpa-key-billing"
 	PluginName = "cpa-key-billing"
-	Version    = "1.3.22"
+	Version    = "1.3.23"
 
 	MenuLabel       = "API Key Billing"
 	MenuDescription = "Manage downstream API key routing, billing, concurrency limits, subscription quotas, and usage"
@@ -167,6 +167,7 @@ type UsageRecord struct {
 	Failed              bool          `json:"Failed"`
 	Failure             UsageFailure  `json:"Failure"`
 	Detail              UsageDetail   `json:"Detail"`
+	ResponseHeaders     http.Header   `json:"ResponseHeaders,omitempty"`
 }
 
 type UsageFailure struct {

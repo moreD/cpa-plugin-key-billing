@@ -37,7 +37,6 @@ type App struct {
 
 func (a *App) SetHostCaller(caller HostCaller) {
 	a.hostCaller = caller
-	a.startAuthQuotaTimer()
 }
 
 func NewApp() *App {
@@ -124,6 +123,7 @@ func (a *App) startAuthQuotaTimer() {
 	done := make(chan struct{})
 	a.authQuotaTimerStop, a.authQuotaTimerDone = stop, done
 	go func() {
+		a.refreshDueAuthQuotas()
 		ticker := time.NewTicker(authQuotaTimerInterval)
 		defer ticker.Stop()
 		defer close(done)
@@ -178,6 +178,7 @@ func (a *App) configure(raw []byte) error {
 	}
 	// Refresh records its result; a download failure does not disable custom prices.
 	_, _ = a.store.EnsureReferencePrices()
+	a.startAuthQuotaTimer()
 	return nil
 }
 
