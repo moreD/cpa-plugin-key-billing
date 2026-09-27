@@ -102,6 +102,100 @@ plugins:
 
 Restart CLIProxyAPI and open **API Key Billing** in the management panel. Review model pricing, create subscription plans, and bind the API keys whose quotas you want to enforce.
 
+### End-to-end setup from a vanilla CLIProxyAPI
+
+This procedure starts with a clean Linux host. Replace the paths as needed, but keep the CPA binary, plugin directory,
+configuration, and state database tied to the same CPA instance.
+
+1. **Prepare CLIProxyAPI.** Download a plugin-capable Linux build from the CPA release page, place it in its own directory,
+   and create the plugin and auth directories:
+
+   ```sh
+   mkdir -p "$HOME/cliproxyapi/plugins" "$HOME/cliproxyapi/auth"
+   cd "$HOME/cliproxyapi"
+   # Place the downloaded cli-proxy-api binary here
+   chmod 0755 cli-proxy-api
+   ```
+
+2. **Create the CPA configuration and auth files.** Configure the listen port, auth directory, downstream API keys, and plugin
+   directory in `~/cliproxyapi/config.yaml`. Start CPA once, complete Codex or other upstream authentication through the CPA
+   management center, and stop it again. Never put access tokens in Git or copy them into this repository.
+
+   ```yaml
+   port: 8088
+   auth-dir: /home/ubuntu/cliproxyapi/auth
+   plugins:
+     enabled: true
+     dir: /home/ubuntu/cliproxyapi/plugins
+   ```
+
+3. **Install this plugin.** From the CPA root, run the installer, or download the matching dynamic library from a release and
+   place it in `~/cliproxyapi/plugins/`:
+
+   ```sh
+   curl -LsSf https://raw.githubusercontent.com/moreD/cpa-plugin-key-billing/main/install.sh | sh
+   ```
+
+   The installed file should be `plugins/cpa-key-billing.so` (`.dylib` on macOS or `.dll` on Windows).
+
+4. **Enable the plugin and choose its state database.** Merge this configuration into the same `config.yaml`. Absolute paths
+   prevent a changed service working directory from creating a second database:
+
+   ```yaml
+   plugins:
+     enabled: true
+     dir: /home/ubuntu/cliproxyapi/plugins
+     configs:
+       cpa-key-billing:
+         enabled: true
+         scheduler_mode: smart
+         state_file: /home/ubuntu/cliproxyapi/plugins/cpa-key-billing-state-v1.db
+   ```
+
+5. **Run it as a user service.** For a first test, run `./cli-proxy-api -config ./config.yaml` directly. For long-running
+   deployments, use a systemd user service so CPA is supervised:
+
+   ```ini
+   # ~/.config/systemd/user/cliproxyapi.service
+   [Unit]
+   Description=CLIProxyAPI Service
+   After=network-online.target
+
+   [Service]
+   WorkingDirectory=%h/cliproxyapi
+   ExecStart=%h/cliproxyapi/cli-proxy-api -config %h/cliproxyapi/config.yaml
+   Restart=on-failure
+   RestartSec=3
+
+   [Install]
+   WantedBy=default.target
+   ```
+
+   ```sh
+   systemctl --user daemon-reload
+   systemctl --user enable --now cliproxyapi.service
+   systemctl --user status cliproxyapi.service
+   ```
+
+6. **Verify the plugin and data flow.** Confirm that the log reports a successful plugin registration, then open
+   `http://<CPA host>:8088/v0/resource/plugins/cpa-key-billing/ui`:
+
+   ```sh
+   journalctl --user -u cliproxyapi.service -n 100 --no-pager | grep 'plugin registered'
+   curl -fsS http://127.0.0.1:8088/
+   ```
+
+   Request billing events, the 5-hour/7-day windows returned in Codex responses, and reset counts plus expiration times from the
+   backend quota query are stored in the same `state_file` and shown in the auth tab. The backend timer checks every hour; auths
+   with no recorded request usage refresh randomly after 40–80 minutes, while auths with request usage refresh after 1,200–1,600 minutes.
+
+Before upgrading, back up the state database and restart through the user service:
+
+```sh
+cp plugins/cpa-key-billing-state-v1.db "plugins/cpa-key-billing-state-v1.db.$(date -u +%Y%m%dT%H%M%SZ).bak"
+systemctl --user restart cliproxyapi.service
+```
+
 ### Migrating the legacy scheduler and API-key limits
 
 If the CPA configuration still has the separate `smart-load-balancer` plugin and

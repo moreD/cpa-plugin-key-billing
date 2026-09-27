@@ -100,6 +100,94 @@ plugins:
 
 重启 CLIProxyAPI 后，在管理中心打开「API Key Billing」。确认模型定价后，创建订阅计划并绑定需要限制的 API Key。
 
+### 从全新 CLIProxyAPI 到插件：端到端部署
+
+下面的流程适合一台没有现成 CPA 配置的 Linux 主机。命令中的路径可以替换，但
+`plugins/`、配置文件和状态数据库必须属于同一个 CPA 实例。
+
+1. **准备 CLIProxyAPI。** 从 CPA 发布页下载支持插件的 Linux 二进制，放到独立目录并赋予执行权限：
+
+   ```sh
+   mkdir -p "$HOME/cliproxyapi/plugins" "$HOME/cliproxyapi/auth"
+   cd "$HOME/cliproxyapi"
+   # 将下载的 cli-proxy-api 放到当前目录
+   chmod 0755 cli-proxy-api
+   ```
+
+2. **准备 CPA 配置和认证。** 在 `~/cliproxyapi/config.yaml` 中至少配置监听端口、认证目录和插件目录。先启动一次 CPA，
+   使用 CPA 管理中心完成 Codex 等上游认证，再停止它；不要把访问令牌写入配置或提交到 Git。
+
+   ```yaml
+   port: 8088
+   auth-dir: /home/ubuntu/cliproxyapi/auth
+   plugins:
+     enabled: true
+     dir: /home/ubuntu/cliproxyapi/plugins
+   ```
+
+3. **安装本插件。** 在 CPA 根目录执行安装脚本，或从 Release 下载对应动态库并放入 `~/cliproxyapi/plugins/`：
+
+   ```sh
+   curl -LsSf https://raw.githubusercontent.com/moreD/cpa-plugin-key-billing/main/install.sh | sh
+   ```
+
+   安装后应存在 `plugins/cpa-key-billing.so`（macOS 为 `.dylib`，Windows 为 `.dll`）。
+
+4. **启用插件并指定状态库。** 把插件配置合并到同一个 `config.yaml`；使用绝对路径可以避免服务工作目录变化导致状态库分裂：
+
+   ```yaml
+   plugins:
+     enabled: true
+     dir: /home/ubuntu/cliproxyapi/plugins
+     configs:
+       cpa-key-billing:
+         enabled: true
+         scheduler_mode: smart
+         state_file: /home/ubuntu/cliproxyapi/plugins/cpa-key-billing-state-v1.db
+   ```
+
+5. **作为用户服务运行。** 首次验证可以直接执行 `./cli-proxy-api -config ./config.yaml`。长期运行建议使用 systemd 用户服务：
+
+   ```ini
+   # ~/.config/systemd/user/cliproxyapi.service
+   [Unit]
+   Description=CLIProxyAPI Service
+   After=network-online.target
+
+   [Service]
+   WorkingDirectory=%h/cliproxyapi
+   ExecStart=%h/cliproxyapi/cli-proxy-api -config %h/cliproxyapi/config.yaml
+   Restart=on-failure
+   RestartSec=3
+
+   [Install]
+   WantedBy=default.target
+   ```
+
+   ```sh
+   systemctl --user daemon-reload
+   systemctl --user enable --now cliproxyapi.service
+   systemctl --user status cliproxyapi.service
+   ```
+
+6. **验证插件和数据流。** 确认日志显示插件注册成功，然后打开 `http://<CPA 地址>:8088/v0/resource/plugins/cpa-key-billing/ui`：
+
+   ```sh
+   journalctl --user -u cliproxyapi.service -n 100 --no-pager | grep 'plugin registered'
+   curl -fsS http://127.0.0.1:8088/
+   ```
+
+   每次请求的计费事件、Codex 响应中的 5 小时/7 天窗口，以及后台额度查询得到的重置次数和过期时间都会写入同一个
+   `state_file`，并在认证文件页显示。后台定时器每小时检查到期快照；没有请求用量的认证使用 40–80 分钟随机重查，
+   已有请求用量的认证使用 1200–1600 分钟随机重查。
+
+升级插件前先备份状态库，并使用用户服务重启：
+
+```sh
+cp plugins/cpa-key-billing-state-v1.db "plugins/cpa-key-billing-state-v1.db.$(date -u +%Y%m%dT%H%M%SZ).bak"
+systemctl --user restart cliproxyapi.service
+```
+
 ### 迁移旧版调度器和 API Key 额度
 
 如果 CPA 配置中仍有独立的 `smart-load-balancer` 插件和
