@@ -310,11 +310,34 @@ func (a *App) refreshDueAuthQuotas() {
 		if errSnapshot != nil {
 			continue
 		}
+		hasUsage := false
+		if usage, errUsage := a.store.AuthUsage(file.AuthIndex, category); errUsage == nil {
+			hasUsage = usage.Requests > 0
+		}
+		if found && !authQuotaRefreshScheduleMatches(snapshot, now, hasUsage) {
+			snapshot.NextFetchAt = a.nextAuthQuotaRefresh(file.AuthIndex, category, now)
+			if errSave := a.store.SaveAuthQuota(snapshot); errSave != nil {
+				a.store.AddPluginLog(billing.PluginLogError, "Failed to migrate auth quota refresh schedule: %v", errSave)
+			}
+			continue
+		}
 		if found && now.Before(snapshot.NextFetchAt) {
 			continue
 		}
 		a.maybeRefreshAuthQuota(file.AuthIndex, category, file.AccountType)
 	}
+}
+
+func authQuotaRefreshScheduleMatches(snapshot billing.AuthQuotaSnapshot, now time.Time, hasUsage bool) bool {
+	remaining := snapshot.NextFetchAt.Sub(now)
+	if remaining < 0 {
+		return true
+	}
+	minRefresh, maxRefresh := minAuthQuotaRefreshNoUsage, maxAuthQuotaRefreshNoUsage
+	if hasUsage {
+		minRefresh, maxRefresh = minAuthQuotaRefreshUsage, maxAuthQuotaRefreshUsage
+	}
+	return remaining >= minRefresh && remaining <= maxRefresh
 }
 
 // maybeRefreshAuthQuota performs a due refresh synchronously during a host

@@ -139,6 +139,21 @@ func TestCodexResponseQuotaIsMergedIntoAuthSnapshot(t *testing.T) {
 	}
 }
 
+func TestAuthQuotaRefreshScheduleUsesUsageState(t *testing.T) {
+	now := time.Date(2026, time.September, 27, 3, 0, 0, 0, time.UTC)
+	noUsage := billing.AuthQuotaSnapshot{NextFetchAt: now.Add(60 * time.Minute)}
+	if !authQuotaRefreshScheduleMatches(noUsage, now, false) {
+		t.Fatal("40-80 minute schedule was rejected for an auth without usage")
+	}
+	if authQuotaRefreshScheduleMatches(noUsage, now, true) {
+		t.Fatal("short schedule was accepted for an auth with usage")
+	}
+	withUsage := billing.AuthQuotaSnapshot{NextFetchAt: now.Add(1400 * time.Minute)}
+	if !authQuotaRefreshScheduleMatches(withUsage, now, true) {
+		t.Fatal("1200-1600 minute schedule was rejected for an auth with usage")
+	}
+}
+
 func TestNormalizeCodexPlan(t *testing.T) {
 	tests := map[string]string{
 		"plus": "plus", " PRO ": "pro-20x", "prolite": "pro-5x", "pro-lite": "pro-5x",
