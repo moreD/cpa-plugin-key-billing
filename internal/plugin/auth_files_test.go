@@ -847,12 +847,16 @@ func TestAuthQuotaReset(t *testing.T) {
 				}
 				req.Query.Set("auth_name", files.Files[0].Name)
 			}
-			raw, err := app.handleManagement(mustMarshal(t, req))
-			if err != nil {
-				t.Fatal(err)
-			}
 			var response ManagementResponse
-			decodeResult(t, raw, &response)
+			if tc.name == "admin" {
+				raw, err := app.handleManagement(mustMarshal(t, req))
+				if err != nil {
+					t.Fatal(err)
+				}
+				decodeResult(t, raw, &response)
+			} else {
+				response = app.authQuotaReset(req, access)
+			}
 			if response.StatusCode != tc.want {
 				t.Fatalf("status = %d, want %d: %s", response.StatusCode, tc.want, response.Body)
 			}

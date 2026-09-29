@@ -2539,7 +2539,6 @@
                 <button type="button" data-account-tab="analysis" data-i18n="ui.analysis">Analysis</button>
                 <button type="button" data-account-tab="request-events" data-i18n="ui.request_events">Request events</button>
                 <button type="button" data-account-tab="errors" data-i18n="ui.error_events">Error events</button>
-                <button type="button" data-account-tab="auth-files" data-i18n="ui.auth_files">Auth Files</button>
               </nav>
             </div>
             <div class="page-tab-actions hidden">
@@ -2633,32 +2632,6 @@
               </div>
               <div id="account-errors-body" class="event-list-region"></div>
               <div class="event-list-footer"><span id="account-error-note" class="muted small"></span></div>
-            </div>
-          </section>
-          <section id="account-tab-auth-files" class="hidden">
-            <div class="card">
-              <div class="row spread section-toolbar">
-                <h2 data-i18n="ui.auth_files">Auth Files</h2>
-                <div class="row section-actions auth-filter-bar">
-                  <label class="toggle-filter">
-                    <input id="account-auth-enabled-only" type="checkbox" role="switch" checked />
-                    <span data-i18n="ui.enabled_only">Enabled only</span>
-                  </label>
-                  <span class="native-select">
-                    <select id="account-auth-provider" aria-label="Filter by auth file category" data-i18n-aria-label="ui.filter_by_auth_file_category">
-                      <option value="" data-i18n="ui.all_categories">All categories</option>
-                      <option value="claude">Claude</option>
-                      <option value="antigravity">Antigravity</option>
-                      <option value="codex">Codex</option>
-                      <option value="xai">xAI</option>
-                      <option value="kimi">Kimi</option>
-                    </select>
-                  </span>
-                  <input id="account-auth-search" type="search" placeholder="Search auth files" autocomplete="off"  data-i18n-placeholder="ui.search_auth_files"/>
-                  <button id="account-auth-refresh-filtered" class="labeled-icon-button" type="button" data-i18n="ui.update_quotas">Refresh quotas</button>
-                </div>
-              </div>
-              <div id="account-auth-files-body"></div>
             </div>
           </section>
         </section>
@@ -2761,7 +2734,7 @@
       const embedded = window.parent !== window;
       document.body.classList.toggle("embedded", embedded);
       const ADMIN_TAB_IDS = ["keys", "analysis", "request-events", "errors", "auth-files", "settings"];
-      const ACCOUNT_TAB_IDS = ["subscription", "analysis", "request-events", "errors", "auth-files"];
+      const ACCOUNT_TAB_IDS = ["subscription", "analysis", "request-events", "errors"];
       const PAGE_ROUTE_KEY = "cpa-key-billing.route.v1." + (embedded ? "embedded" : "standalone");
 
       function parsePageRoute(value) {
@@ -2962,8 +2935,7 @@
           subscription: m("ui.subscription"),
           routing: m("ui.access_permissions"),
           models: m("ui.model_catalog"),
-          catalog: m("ui.model_prices"),
-          authFiles: m("ui.auth_files")
+          catalog: m("ui.model_prices")
         })
       };
       // Key metadata is shared by configuration, event queries, and analysis.
@@ -3398,10 +3370,10 @@
         for (const id of ["request-event-model", "request-event-source", "error-model", "error-source", "error-type"])
           restoreChoice(role, prefix + id, "", true);
         restoreChoice(role, prefix + "request-event-status", "");
-        restoreChoice(role, prefix + "auth-enabled-only", true);
-        restoreChoice(role, prefix + "auth-provider", "");
         setPrivacyMask(role, viewPreference(role, prefix + "privacy-mask", false));
         if (!account) {
+          restoreChoice(role, "auth-enabled-only", true);
+          restoreChoice(role, "auth-provider", "");
           restoreChoice(role, "analysis-key", "", true);
           restoreChoice(role, "keys-include-deleted", false);
           restoreChoice(role, "plugin-log-level", "all");
@@ -3427,8 +3399,8 @@
         const prefix = account ? "account-" : "";
         closeSharedTimePopover(account);
         setPrivacyMask(role, false);
-        $(prefix + "auth-search").value = "";
         if (!account) {
+          $("auth-search").value = "";
           $("key-filter").value = "";
           $("keys-include-deleted").checked = false;
           $("price-filter").value = "";
@@ -4544,7 +4516,7 @@
           analysis: { query: "analysis", sections: [] },
           "request-events": { query: "events", sections: [keyedSection(["events"], () => renderRequestEvents(account))] },
           errors: { query: "errors", sections: [keyedSection(["errors"], () => renderErrors(account))] },
-          "auth-files": { sections: [section(["authFiles"], () => renderAuthFiles(account))] }
+          ...(account ? {} : { "auth-files": { sections: [section(["authFiles"], () => renderAuthFiles(false))] } })
         };
         if (account) {
           result.subscription = {
@@ -4583,7 +4555,6 @@
           if (account) page.sources.unshift(data.profile);
           page.task = null;
         }
-        if (account) result["auth-files"].sections[0].sources.push(data.profile);
         return result;
       }
       const pages = { admin: createPages("admin"), account: createPages("account") };
@@ -5596,6 +5567,7 @@
       }
 
       function resetAuthQuotaBatch(account) {
+        if (account) return;
         const bulk = authUI(account).bulk;
         bulk.dataset.loading = "false";
         setLabeledActionIcon(bulk, "refresh", m("ui.update_quotas"));
@@ -9373,7 +9345,7 @@
           reload();
         };
       }
-      for (const account of [false, true]) {
+      for (const account of [false]) {
         const ui = authUI(account);
         const role = account ? "account" : "admin";
         setLabeledActionIcon(ui.bulk, "refresh", m("ui.update_quotas"));

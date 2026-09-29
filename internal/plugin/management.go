@@ -116,9 +116,6 @@ var resourceEndpoints = []resourceEndpoint{
 	{routeAnalysis, (*App).analysis},
 	{routeEvents, (*App).listRequestEvents},
 	{routeErrors, (*App).listRequestErrors},
-	{routeAuthFiles, func(a *App, _ ManagementRequest, access viewAccess) ManagementResponse { return a.authFiles(access) }},
-	{routeAuthQuota, (*App).authQuota},
-	{routeAuthQuotaReset, (*App).authQuotaReset},
 }
 
 func managementRegistration() ManagementRegistrationResponse {

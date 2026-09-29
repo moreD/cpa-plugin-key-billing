@@ -139,6 +139,28 @@ func TestAccountRoutesRejectMissingOrAmbiguousBearer(t *testing.T) {
 	}
 }
 
+func TestAccountRoutesDoNotExposeAuthFiles(t *testing.T) {
+	app := configuredAccountApp(t)
+	hostCalls := 0
+	app.SetHostCaller(func(string, any) (json.RawMessage, error) {
+		hostCalls++
+		return nil, nil
+	})
+	for _, path := range []string{routeAuthFiles, routeAuthQuota} {
+		response := callAccount(t, app, path, accountTestKeyA, nil)
+		if response.StatusCode != http.StatusNotFound {
+			t.Fatalf("account route %s status = %d, want %d", path, response.StatusCode, http.StatusNotFound)
+		}
+	}
+	response := callAccount(t, app, routeAuthQuotaReset, accountTestKeyA, nil)
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("account route %s status = %d, want %d", routeAuthQuotaReset, response.StatusCode, http.StatusNotFound)
+	}
+	if hostCalls != 0 {
+		t.Fatalf("auth-file account routes made %d host calls", hostCalls)
+	}
+}
+
 func TestAccountRequestEventsUseSharedShapeWithoutCrossingScopes(t *testing.T) {
 	app := configuredAccountApp(t)
 	response := callAccount(t, app, routeEvents, accountTestKeyA, url.Values{"limit": {"10"}})

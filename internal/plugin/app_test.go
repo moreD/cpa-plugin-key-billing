@@ -160,7 +160,6 @@ func TestManagementRegistrationExposesOnlyCurrentEndpoints(t *testing.T) {
 	wantResources := map[string]bool{
 		"/ui": false, "/profile": false, "/subscription": false, "/routing": false, "/prices": false,
 		"/analysis": false, "/events": false, "/errors": false,
-		"/auth-files": false, "/auth-files/quota": false, "/auth-files/quota/reset": false,
 	}
 	if len(registration.Resources) != len(wantResources) {
 		t.Fatalf("resources = %d, want %d: %+v", len(registration.Resources), len(wantResources), registration.Resources)
