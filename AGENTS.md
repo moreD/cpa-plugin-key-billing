@@ -41,7 +41,7 @@ Source paths are relative to this repository's root:
 
 ## Release and Changelog
 
-- Before tagging, increment the patch version unless the user explicitly requests a major or minor change, and create an annotated tag with `git tag -a` and a message. Whenever changing `Version` in `internal/plugin/types.go`, update the footer version in `internal/plugin/ui.html` to match.
+- Follow the official upstream version number; never advance its numeric components for local changes. Append a suffix such as `+moreD` to identify local builds. When tagging, create an annotated tag with `git tag -a` and a message. Whenever changing `Version` in `internal/plugin/types.go`, update the footer version in `internal/plugin/ui.html` to match.
 - Edit `Changelog.md` only when the user explicitly requests preparation for a tag or release.
 - Prepend one `## vX.Y.Z` section directly below `# Changelog`; never append releases or add an unreleased placeholder.
 - Treat sections for tags that already exist as immutable history. Do not edit, move, merge, or delete them unless the user explicitly requests changes to that tag's entry.
