@@ -12,7 +12,6 @@ import (
 	"cpa-key-billing/internal/billing"
 	"cpa-key-billing/internal/sqlite"
 	smartbalancer "github.com/nitansde/smart-load-balancer/balancer"
-	smartquota "github.com/nitansde/smart-load-balancer/quota"
 )
 
 type App struct {
@@ -29,7 +28,7 @@ type App struct {
 	scheduler             subsetScheduler
 	smartBalancer         *smartbalancer.Balancer
 	smartDivert           *smartbalancer.DivertState
-	smartLedger           *smartquota.Ledger
+	smartLedger           *resettableQuotaLedger
 	pending               map[string]pendingRouteLog
 	pendingSequence       uint64
 	authQuotaMu           sync.Mutex
@@ -61,7 +60,7 @@ func newApp(store *billing.Store) *App {
 		authQuotaRefresh:      make(map[string]struct{}),
 		smartBalancer:         smartbalancer.New(),
 		smartDivert:           smartbalancer.NewDivertState(),
-		smartLedger:           smartquota.NewLedger(),
+		smartLedger:           newResettableQuotaLedger(),
 	}
 	app.smartBalancer.SetDivertState(app.smartDivert)
 	return app

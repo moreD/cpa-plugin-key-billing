@@ -5965,7 +5965,7 @@
             owner.authQuotaErrors.delete(index);
             persistAuthQuotaCache(account);
             renderAuthFiles(account);
-            let resetConfirmed = false;
+            let resetConfirmed = false, coreResetFailed = false;
             try {
               const params = new URLSearchParams({
                 auth_index: file.auth_index,
@@ -5985,6 +5985,19 @@
               const result = account ? await accountAPI(path, opts) : await plugin("POST", path, null, opts);
               if (result?.reset !== true) throw new UIError(m("ui.reset_was_not_confirmed_update_the_quota_to_check_its_current_status"));
               resetConfirmed = true;
+              if (!account) {
+                try {
+                  // The provider reset does not release CPA's runtime cooldown.
+                  const core = await api(
+                    "POST",
+                    "/v0/management/reset-quota",
+                    { auth_index: index },
+                    { timeoutMS: AUTH_QUOTA_TIMEOUT_MS, keepSessionOnForbidden: true }
+                  );
+                  if (core?.status !== "ok" || core.auth_index !== index) throw new UIError(m("ui.invalid_server_response"));
+                  if (authQuotaCacheCurrent(account, owner, generation, index)) file.unavailable = false;
+                } catch (_) { coreResetFailed = true; }
+              }
             } finally {
               if (authQuotaCacheCurrent(account, owner, generation, index)) {
                 owner.authQuotaLoading.delete(index);
@@ -5996,11 +6009,13 @@
             if (!authQuotaCacheCurrent(account, owner, generation, index)) return;
             await refreshAuthQuota(file, account);
             if (authQuotaCacheCurrent(account, owner, generation, index)) {
-              const failed = owner.authQuotaErrors.has(index);
+              const failed = coreResetFailed || owner.authQuotaErrors.has(index);
               notify(
-                failed
-                  ? m("ui.quota_reset_but_refresh_failed_please_update_the_quota_manually")
-                  : m("ui.reset_codex_quota_for_value", { v0: file.name }),
+                coreResetFailed
+                  ? m("ui.quota_reset_but_core_cooldown_failed")
+                  : failed
+                    ? m("ui.quota_reset_but_refresh_failed_please_update_the_quota_manually")
+                    : m("ui.reset_codex_quota_for_value", { v0: file.name }),
                 failed ? "err" : "ok"
               );
             }

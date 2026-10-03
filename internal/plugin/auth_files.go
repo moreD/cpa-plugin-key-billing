@@ -418,6 +418,16 @@ func (a *App) authQuotaReset(req ManagementRequest, access viewAccess) Managemen
 	if errReset := a.resetCodexQuota(req.HostCallbackID, *selected, resetID); errReset != nil {
 		return viewDetailedError(access, http.StatusBadGateway, "reset_failed", errReset)
 	}
+	// A redeemed credit invalidates both the estimated backoff and the old
+	// quota snapshot. Keep usage history, and let the separate query report
+	// the new quota rather than inventing remaining percentages.
+	a.smartLedger.ClearBlock(selected.ID)
+	a.smartLedger.ClearBlock(selected.AuthIndex)
+	if errSave := a.store.SaveAuthQuota(billing.AuthQuotaSnapshot{
+		AuthIndex: selected.AuthIndex, Provider: "codex", NextFetchAt: a.store.Now(),
+	}); errSave != nil {
+		a.store.AddPluginLog(billing.PluginLogError, "Failed to invalidate auth quota after reset: %v", errSave)
+	}
 	// Refresh separately so a failed query cannot obscure a successful reset.
 	return viewJSON(access, http.StatusOK, map[string]bool{"reset": true})
 }

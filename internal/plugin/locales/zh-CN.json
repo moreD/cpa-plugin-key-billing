@@ -274,6 +274,7 @@
   "ui.the_auth_file_or_quota_changed_close_this_dialog_update_the_quota_and_try_again": "认证文件或额度状态已变化，请关闭弹窗并刷新额度后重试",
   "ui.reset_was_not_confirmed_update_the_quota_to_check_its_current_status": "重置结果未确认，请先刷新额度，以免重复消耗重置次数",
   "ui.quota_reset_but_refresh_failed_please_update_the_quota_manually": "额度已重置，但刷新失败，请手动刷新额度",
+  "ui.quota_reset_but_core_cooldown_failed": "Codex 额度已重置，但 CPA 冷却状态清除失败。请在管理中心的认证文件页面清除冷却，无需再次消耗主动重置次数。",
   "ui.reset_codex_quota_for_value": "已重置「{v0}」的 Codex 额度",
   "ui.upstream_quota": "上游额度",
   "ui.updating_0_value": "更新中 0 / {v0}",

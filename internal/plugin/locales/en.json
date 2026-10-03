@@ -274,6 +274,7 @@
   "ui.the_auth_file_or_quota_changed_close_this_dialog_update_the_quota_and_try_again": "The auth file or quota changed. Close this dialog, refresh the quota, and try again.",
   "ui.reset_was_not_confirmed_update_the_quota_to_check_its_current_status": "Reset not confirmed. Refresh the quota before retrying to avoid using another reset credit.",
   "ui.quota_reset_but_refresh_failed_please_update_the_quota_manually": "Quota reset, but refresh failed. Please refresh the quota manually.",
+  "ui.quota_reset_but_core_cooldown_failed": "Codex quota reset, but CPA's cooldown could not be cleared. Clear the cooldown in the management center's Auth Files page; do not spend another reset credit.",
   "ui.reset_codex_quota_for_value": "Codex quota reset for “{v0}”",
   "ui.upstream_quota": "Upstream quota",
   "ui.updating_0_value": "Updating 0 / {v0}",

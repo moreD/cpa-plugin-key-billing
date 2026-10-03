@@ -12,6 +12,7 @@ import (
 
 	"cpa-key-billing/internal/billing"
 	"cpa-key-billing/internal/messages"
+	smartquota "github.com/nitansde/smart-load-balancer/quota"
 )
 
 func TestAuthFilesExposeOnlyDisplayFieldsInCategoryOrder(t *testing.T) {
@@ -768,6 +769,18 @@ func TestAuthQuotaReset(t *testing.T) {
 				t.Fatal(err)
 			}
 			file := hostAuthFile{ID: "reset-file", AuthIndex: "codex-1", Name: "user@example.com.json", Type: "codex", Source: "file"}
+			now := app.store.Now()
+			for _, id := range []string{file.ID, file.AuthIndex, "unrelated-file"} {
+				app.smartLedger.Observe(smartquota.UsageObservation{AuthID: id, TotalTokens: 10, ObservedAt: now})
+				app.smartLedger.Observe(smartquota.UsageObservation{AuthID: id, Failed: true, StatusCode: 429, ObservedAt: now})
+			}
+			if err := app.store.SaveAuthQuota(billing.AuthQuotaSnapshot{
+				AuthIndex: file.AuthIndex, Provider: "codex", FetchedAt: now, NextFetchAt: now.Add(5 * time.Hour),
+				AvailableCount: 1, AvailableCountKnown: true,
+				Quota: []billing.AuthQuotaRow{{Label: "5-hour limit", RemainingPercent: floatPointer(0), ResetAt: now.Add(5 * time.Hour).Format(time.RFC3339)}},
+			}); err != nil {
+				t.Fatal(err)
+			}
 			req := ManagementRequest{
 				Method: http.MethodGet, Path: resourceBase + routeAuthQuotaReset, HostCallbackID: "reset-callback",
 				Headers: http.Header{"Authorization": {"Bearer " + accountTestKeyA}},
@@ -876,6 +889,47 @@ func TestAuthQuotaReset(t *testing.T) {
 			}
 			if tc.want == 200 && string(response.Body) != `{"reset":true}` {
 				t.Fatalf("unexpected reset result: %s", response.Body)
+			}
+			for _, id := range []string{file.ID, file.AuthIndex, "unrelated-file"} {
+				entry, found := app.smartLedger.Get(id)
+				wantBlocked := tc.want != 200 || id == "unrelated-file"
+				if !found || entry.Blocked(now) != wantBlocked || entry.ConsumedTokens != 10 || entry.Requests != 1 {
+					t.Fatalf("ledger after reset for %s = %+v, want blocked=%t and preserved usage", id, entry, wantBlocked)
+				}
+			}
+			snapshot, found, err := app.store.AuthQuota(file.AuthIndex, "codex")
+			if err != nil || !found {
+				t.Fatalf("quota snapshot missing: found=%t err=%v", found, err)
+			}
+			if tc.want == 200 {
+				if len(snapshot.Quota) != 0 || snapshot.AvailableCountKnown || !snapshot.FetchedAt.IsZero() || snapshot.NextFetchAt.After(app.store.Now()) {
+					t.Fatalf("successful reset kept stale quota: %+v", snapshot)
+				}
+				app.smartLedger.Observe(smartquota.UsageObservation{AuthID: file.ID, TotalTokens: 5, ObservedAt: now.Add(time.Minute)})
+				if entry, _ := app.smartLedger.Get(file.ID); entry.Blocked(now) || entry.ConsumedTokens != 15 {
+					t.Fatalf("success after reset restored the old block or lost usage: %+v", entry)
+				}
+				app.smartLedger.Observe(smartquota.UsageObservation{AuthID: file.ID, Failed: true, StatusCode: 429, ObservedAt: now.Add(2 * time.Minute)})
+				if entry, _ := app.smartLedger.Get(file.ID); !entry.Blocked(now.Add(2 * time.Minute)) {
+					t.Fatalf("new quota failure after reset did not block: %+v", entry)
+				}
+				for attempt := range 2 {
+					app.smartLedger.ClearBlock(file.ID)
+					app.smartLedger.Observe(smartquota.UsageObservation{
+						AuthID: file.ID, Failed: true, StatusCode: 429, FailureBody: "too many concurrent requests", ObservedAt: now.Add(3 * time.Minute),
+					})
+					if entry, _ := app.smartLedger.Get(file.ID); entry.Blocked(now.Add(3 * time.Minute)) {
+						t.Fatalf("transient concurrency failure restored a cleared block: %+v", entry)
+					}
+					app.smartLedger.Observe(smartquota.UsageObservation{
+						AuthID: file.ID, Failed: true, StatusCode: 429, FailureBody: "weekly quota exceeded", ObservedAt: now.Add(4 * time.Minute),
+					})
+					if entry, _ := app.smartLedger.Get(file.ID); !entry.Blocked(now.Add(4 * time.Minute)) {
+						t.Fatalf("weekly failure %d did not block after reset: %+v", attempt, entry)
+					}
+				}
+			} else if len(snapshot.Quota) != 1 || !snapshot.AvailableCountKnown || snapshot.AvailableCount != 1 {
+				t.Fatalf("failed reset changed quota: %+v", snapshot)
 			}
 			if strings.Contains(string(response.Body), "dummy-upstream-token") {
 				t.Fatal("response leaked credentials")

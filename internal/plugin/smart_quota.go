@@ -2,12 +2,64 @@ package plugin
 
 import (
 	"strings"
+	"sync"
 	"time"
 
 	"cpa-key-billing/internal/billing"
 	smartbalancer "github.com/nitansde/smart-load-balancer/balancer"
 	smartquota "github.com/nitansde/smart-load-balancer/quota"
 )
+
+// resettableQuotaLedger keeps manual reset support in the plugin rather than
+// changing the pinned scheduler dependency. Only the redeemed backoff is
+// suppressed; usage remains intact and a new quota failure can block again.
+type resettableQuotaLedger struct {
+	mu            sync.Mutex
+	ledger        *smartquota.Ledger
+	clearedBlocks map[string]time.Time
+}
+
+func newResettableQuotaLedger() *resettableQuotaLedger {
+	return &resettableQuotaLedger{ledger: smartquota.NewLedger(), clearedBlocks: make(map[string]time.Time)}
+}
+
+func (l *resettableQuotaLedger) Observe(observation smartquota.UsageObservation) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.ledger.Observe(observation)
+	if _, cleared := l.clearedBlocks[observation.AuthID]; cleared && observation.Failed && observation.StatusCode == 429 {
+		// Weekly failures can reuse the same reset deadline. Ask a fresh ledger
+		// whether this observation creates a block, using the dependency's own
+		// distinction between quota exhaustion and transient concurrency limits.
+		probe := smartquota.NewLedger()
+		probe.Observe(observation)
+		if entry, _ := probe.Get(observation.AuthID); !entry.BlockedUntil.IsZero() {
+			delete(l.clearedBlocks, observation.AuthID)
+		}
+	}
+	if entry, found := l.ledger.Get(observation.AuthID); found && !entry.BlockedUntil.Equal(l.clearedBlocks[observation.AuthID]) {
+		delete(l.clearedBlocks, observation.AuthID)
+	}
+}
+
+func (l *resettableQuotaLedger) Get(authID string) (smartquota.LedgerEntry, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	entry, found := l.ledger.Get(authID)
+	if cleared, ok := l.clearedBlocks[authID]; ok && entry.BlockedUntil.Equal(cleared) {
+		entry.BlockedUntil = time.Time{}
+		entry.BlockReason = ""
+	}
+	return entry, found
+}
+
+func (l *resettableQuotaLedger) ClearBlock(authID string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if entry, found := l.ledger.Get(authID); found && !entry.BlockedUntil.IsZero() {
+		l.clearedBlocks[authID] = entry.BlockedUntil
+	}
+}
 
 // billingQuotaResolver adapts the upstream scheduler's quota resolver to the
 // billing plugin's persisted snapshots. The scheduler candidate ID is CPA's
