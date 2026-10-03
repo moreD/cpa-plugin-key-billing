@@ -1086,6 +1086,17 @@
         -webkit-backdrop-filter: blur(0.28em);
         pointer-events: none;
       }
+      .auth-quota-overview { display: grid; gap: 8px; margin-bottom: 16px; }
+      .auth-quota-stat {
+        display: grid;
+        gap: 5px;
+        min-width: 0;
+        padding: 14px;
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-md);
+        background: var(--bg-secondary);
+      }
+      .auth-quota-average { color: var(--text-primary); font-size: 24px; font-variant-numeric: tabular-nums; }
       .auth-file-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 12px; align-items: stretch; }
       .auth-file-card {
         height: 100%;
@@ -5862,6 +5873,77 @@
         );
       }
 
+      function aggregateAuthQuota(files, owner) {
+        const windows = [
+          { key: "backend.5_hour_limit", label: "5-hour limit", title: "ui.average_five_hour_remaining", total: 0, count: 0 },
+          { key: "backend.weekly_limit", label: "Weekly limit", title: "ui.average_seven_day_remaining", total: 0, count: 0 }
+        ];
+        for (const file of files) {
+          if (owner.authQuotaLoading.has(file.auth_index) || owner.authQuotaErrors.has(file.auth_index)) continue;
+          const rows = (owner.authQuotas.get(file.auth_index) || file).quota || [];
+          for (const window of windows) {
+            const matching = rows.filter(
+              (row) =>
+                !row.label_prefix && (row.label_message?.message_key === window.key || row.label === window.label) &&
+                Number.isFinite(row.remaining_percent) &&
+                row.remaining_percent >= 0 &&
+                row.remaining_percent <= 100
+            );
+            if (!matching.length) continue;
+            // Multiple provider groups still give this auth file only one vote.
+            window.total += matching.reduce((sum, row) => sum + row.remaining_percent, 0) / matching.length;
+            window.count++;
+          }
+        }
+        return windows.map((window) => ({ ...window, average: window.count ? window.total / window.count : undefined }));
+      }
+
+      function renderAuthQuotaOverview(files, owner) {
+        const subscriptions = new Map();
+        let unknown = 0;
+        for (const file of files) {
+          const plan = authPlanLabel(file.category, owner.authQuotas.get(file.auth_index)?.plan);
+          if (!plan) {
+            unknown++;
+            continue;
+          }
+          const label = (AUTH_CATEGORY_LABELS[file.category] || file.category) + " " + plan;
+          subscriptions.set(label, (subscriptions.get(label) || 0) + 1);
+        }
+        const plans = [...subscriptions].map(([label, count]) => label + " × " + int(count));
+        if (unknown && plans.length) plans.push(m("ui.unknown_2") + " × " + int(unknown));
+        return el(
+          "div",
+          { class: "auth-quota-overview" },
+          el(
+            "div",
+            { class: "stats" },
+            aggregateAuthQuota(files, owner).map((window) =>
+              el(
+                "div",
+                { class: "auth-quota-stat" },
+                el("span", { class: "small muted", text: m(window.title) }),
+                el("b", {
+                  class: "auth-quota-average",
+                  text:
+                    window.average === undefined
+                      ? "—"
+                      : window.average.toLocaleString(locale(), { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + "%"
+                }),
+                el("span", {
+                  class: "small muted",
+                  text: m("ui.auth_quota_data_coverage", { v0: int(window.count), v1: int(files.length) })
+                })
+              )
+            )
+          ),
+          el("div", { class: "small muted", text: m("ui.auth_quota_average_note") }),
+          plans.length
+            ? el("div", { class: "small muted", text: m("ui.auth_subscription_types", { v0: plans.join(DISPLAY_SEPARATOR) }) })
+            : null
+        );
+      }
+
       function renderAuthFiles(account) {
         const ui = authUI(account);
         if (renderDataPending(ui.body, [ui.files])) {
@@ -5929,6 +6011,7 @@
             );
           }
         });
+        ui.body.prepend(renderAuthQuotaOverview(files, ui.owner));
       }
 
       const AUTH_QUOTA_TIMEOUT_MS = 65000;

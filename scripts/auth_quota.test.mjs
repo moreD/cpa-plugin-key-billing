@@ -11,6 +11,55 @@ const declarations = parse(source).program.body.filter(node => node.type === "Fu
 const functions = declarations.filter(node => ["canResetAuthQuota", "resetAuthQuota"].includes(node.id.name));
 assert.equal(functions.length, 2);
 
+test("quota averages give each auth file equal weight and count available windows independently", async t => {
+  const aggregate = declarations.find(node => node.id.name === "aggregateAuthQuota");
+  assert.ok(aggregate);
+  const context = vm.createContext({});
+  vm.runInContext(source.slice(aggregate.start, aggregate.end), context);
+  const row = (label, remaining_percent, extra = {}) => ({ label, remaining_percent, ...extra });
+  const five = value => row("5-hour limit", value);
+  const weekly = value => row("Weekly limit", value);
+  const scenarios = [
+    { name: "equal weight across subscription types, including zero and missing windows",
+      files: [{ auth_index: "a", quota: [five(0), weekly(30)] }, { auth_index: "b", quota: [five(100)] }, { auth_index: "c" }],
+      cached: [["a", { plan: "plus", quota: [five(0), weekly(30)] }], ["b", { plan: "pro-20x", quota: [five(100)] }]],
+      expected: [[50, 2], [30, 1]] },
+    { name: "refreshed data replaces snapshots, including empty responses",
+      files: [{ auth_index: "a", quota: [five(80), weekly(100)] }, { auth_index: "b", quota: [five(100)] }],
+      cached: [["a", { quota: [five(20), weekly(40)] }], ["b", { quota: [] }]],
+      expected: [[20, 1], [40, 1]] },
+    { name: "multiple provider groups keep one vote per auth file",
+      files: [{ auth_index: "a", quota: [row("5-hour limit", 20, { group_label: "Gemini" }),
+        row("5-hour limit", 80, { group_label: "Claude" })] }, { auth_index: "b", quota: [five(100)] }],
+      expected: [[75, 2], [undefined, 0]] },
+    { name: "main windows exclude model-specific and code-review limits",
+      files: [{ auth_index: "a", quota: [five(60), weekly(40), row("Code review limit", 100),
+        row("Spark 5-hour limit", 100, { label_prefix: "Spark ", label_message: { message_key: "backend.5_hour_limit" } }),
+        row("Opus weekly limit", 100), row("Monthly limit", 100)] }],
+      expected: [[60, 1], [40, 1]] },
+    { name: "translation metadata identifies windows without relying on display language",
+      files: [{ auth_index: "a", quota: [row("translated", 25, { label_message: { message_key: "backend.5_hour_limit" } }),
+        row("translated", 75, { label_message: { message_key: "backend.weekly_limit" } })] }],
+      expected: [[25, 1], [75, 1]] },
+    { name: "invalid percentages are missing data",
+      files: [{ auth_index: "a", quota: [null, undefined, "50", NaN, Infinity, -1, 101].map(five) }],
+      expected: [[undefined, 0], [undefined, 0]] },
+    { name: "loading and failed queries do not contribute stale data",
+      files: [{ auth_index: "a", quota: [five(20)] }, { auth_index: "b", quota: [five(100), weekly(80)] },
+        { auth_index: "c", quota: [five(100), weekly(90)] }], loading: ["b"], errors: [["c", "query failed"]],
+      expected: [[20, 1], [undefined, 0]] },
+    { name: "empty filtered list has no averages", files: [], expected: [[undefined, 0], [undefined, 0]] }
+  ];
+  for (const scenario of scenarios) {
+    await t.test(scenario.name, () => {
+      const owner = { authQuotas: new Map(scenario.cached), authQuotaLoading: new Set(scenario.loading),
+        authQuotaErrors: new Map(scenario.errors) };
+      const actual = context.aggregateAuthQuota(scenario.files, owner);
+      assert.deepEqual(Array.from(actual, window => [window.average, window.count]), scenario.expected);
+    });
+  }
+});
+
 test("quota reset redeems once, releases the core cooldown, and refreshes independently", async t => {
   for (const scenario of ["admin", "account", "provider failure", "core failure", "core forbidden", "invalid core response", "refresh failure"]) {
     await t.test(scenario, async () => {
